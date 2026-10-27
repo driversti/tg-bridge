@@ -15,13 +15,15 @@ from telethon.tl import functions
 
 from tg_bridge.config import Settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
-from tg_bridge.source import Chat, ChatInfo, Person, Topic
+from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, Topic
 from tg_bridge.telegram.identity import client_identity
-from tg_bridge.telegram.mapping import chat_from_dialog, person_from_user, topic_from_forum_topic
+from tg_bridge.telegram.mapping import chat_from_dialog, message_from_tl, person_from_user, topic_from_forum_topic
 
 log = logging.getLogger(__name__)
 
 TOPICS_LIMIT = 100
+# Telethon sleeps through FloodWaits up to this long itself; longer ones surface as RateLimitedError.
+FLOOD_SLEEP_THRESHOLD = 30
 
 NOT_LOGGED_IN = "Not logged in to Telegram. Run: uv run python -m tg_bridge.login"
 
@@ -45,6 +47,7 @@ class ReadOnlyTelegram:
                 self._settings.api_id,
                 self._settings.api_hash,
                 receive_updates=False,
+                flood_sleep_threshold=FLOOD_SLEEP_THRESHOLD,
                 **client_identity(),
             )
         await self._call(self._client.connect)
@@ -103,6 +106,57 @@ class ReadOnlyTelegram:
             topics=tuple(topics),
             topics_total=topics_total,
         )
+
+    async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
+        """At most query.limit messages in iteration order (forward = ascending ids, backward = descending)."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        forward = query.direction == "forward"
+        kwargs: dict[str, Any] = {
+            "limit": None,  # stopped by hand below: end date, client-side filters and query.limit
+            "reverse": forward,
+            "offset_date": query.start if forward else query.end,
+            "offset_id": query.boundary_id or 0,  # takes priority over offset_date; forward means "ids greater than"
+        }
+        client_side_from_me = False
+        if query.topic_id is not None:
+            kwargs["reply_to"] = query.topic_id
+            # With reply_to Telethon silently drops from_user, so the filter happens below.
+            client_side_from_me = query.from_me
+        elif query.from_me:
+            kwargs["from_user"] = "me"
+        started = time.monotonic()
+
+        async def collect() -> list[Message]:
+            found: list[Message] = []
+            if query.limit <= 0:
+                return found
+            async for raw in client.iter_messages(entity, **kwargs):
+                msg = message_from_tl(raw, chat.id)
+                if msg is None:
+                    continue
+                if forward:
+                    if query.end is not None and msg.date >= query.end:
+                        break
+                    if query.start is not None and msg.date < query.start:
+                        continue
+                else:
+                    if query.start is not None and msg.date < query.start:
+                        break
+                    if query.end is not None and msg.date >= query.end:
+                        continue
+                if client_side_from_me and not msg.out:
+                    continue
+                found.append(msg)
+                if len(found) >= query.limit:
+                    break
+            return found
+
+        messages = await self._call(collect)
+        log.info(
+            "read %d messages from %d (%s) in %.2f s", len(messages), chat.id, query.direction, time.monotonic() - started
+        )
+        return messages
 
     async def _input_entity(self, client: Any, chat_id: int) -> Any:
         try:

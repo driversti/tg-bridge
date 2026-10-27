@@ -18,6 +18,7 @@ class StubTelegram:
         self.dialog_calls = 0
         self.dialog_errors: list[Exception] = []
         self.detail_calls = 0
+        self.message_calls = []
 
     async def list_dialogs(self):
         self.dialog_calls += 1
@@ -29,6 +30,10 @@ class StubTelegram:
     async def get_chat_details(self, chat):
         self.detail_calls += 1
         return ChatInfo(chat=chat, description=None, members_count=None, topics=(), topics_total=None)
+
+    async def get_messages(self, chat, query):
+        self.message_calls.append((chat, query))
+        return []
 
     async def connect(self):
         self.connect_calls += 1
@@ -264,3 +269,17 @@ async def test_cache_write_failure_does_not_fail_the_call():
     source = LiveSource(tg, dialog_cache=MemoryCache(save_error=OSError("disk full")))
 
     assert len(await source.list_dialogs()) == 1
+
+
+async def test_get_messages_connects_and_delegates():
+    from tg_bridge.source import MessageQuery
+
+    tg = StubTelegram()
+    source = LiveSource(tg)
+    chat = make_chat()
+    query = MessageQuery("forward", None, None, None, None, False, 10)
+
+    assert await source.get_messages(chat, query) == []
+
+    assert tg.connect_calls == 1
+    assert tg.message_calls == [(chat, query)]

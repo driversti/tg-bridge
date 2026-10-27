@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Person
+from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person
 
 
 class MessageSource(Protocol):
@@ -20,4 +20,8 @@ class MessageSource(Protocol):
 
     async def get_chat_info(self, chat: Chat) -> ChatInfo:
         """Details of one already-resolved chat."""
+        ...
+
+    async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
+        """At most `query.limit` messages of one resolved chat, in the query's direction (forward = ascending ids)."""
         ...

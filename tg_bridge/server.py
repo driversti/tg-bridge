@@ -53,6 +53,30 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         forum topics. `chat`: numeric id, @username, or words from the title."""
         return await tools.get_chat_info(source, settings, chat)
 
+    @server.tool(annotations=READ_ONLY, structured_output=False)
+    async def get_messages(
+        chat: str,
+        days: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        topic: str | int | None = None,
+        from_me: bool = False,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> str:
+        """Read one chat's messages in time order, as compact lines grouped by day.
+        `chat`: numeric id, @username, or words from the title.
+        Period: `days` (1 = today, 2 = since yesterday 00:00, …) OR `since`/`until` (YYYY-MM-DD, "YYYY-MM-DD HH:MM",
+        "today", "yesterday"; `until` dates include that whole day). No period = the latest messages.
+        `topic`: forum topic id or title words (see get_chat_info). `from_me`: only messages the user sent.
+        If the result ends with "Next: call get_messages(...)", more messages exist: make exactly that call, copying
+        chat and cursor character for character (other arguments come from the cursor). To read a whole period,
+        keep calling until the result ends with "End of period."."""
+        return await tools.get_messages(
+            source, settings, chat, days=days, since=since, until=until, topic=topic, from_me=from_me,
+            cursor=cursor, limit=limit,
+        )
+
     return server
 
 

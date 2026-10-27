@@ -56,3 +56,46 @@ class ChatInfo:
     members_count: int | None  # None when hidden/unknown or 1:1
     topics: tuple[Topic, ...]  # empty unless forum
     topics_total: int | None  # Telegram's count when it exceeds len(topics)
+
+
+MediaKind = Literal[
+    "photo", "video", "gif", "voice", "audio", "video_note", "sticker", "document", "poll", "location", "contact", "other"
+]
+
+
+@dataclass(frozen=True)
+class MediaInfo:
+    kind: MediaKind
+    file_name: str | None
+    size: int | None  # bytes
+    mime_type: str | None
+    duration: int | None  # seconds
+    label: str | None  # sticker emoji, poll question
+
+
+@dataclass(frozen=True)
+class Message:
+    id: int
+    chat_id: int
+    date: datetime  # aware UTC
+    edit_date: datetime | None  # aware UTC
+    out: bool  # sent by the logged-in account
+    sender: Person | None  # user senders
+    sender_title: str | None  # channel / anonymous admin title, or channel post_author
+    text: str  # "" when none
+    reply_to_id: int | None  # None when it only points at the forum topic root
+    forward_from: str | None  # display name of the original sender/chat, "hidden" if unknown
+    topic_id: int | None
+    media: MediaInfo | None
+    action: str | None  # short service-message label, e.g. "joined", "pinned #4807"
+
+
+@dataclass(frozen=True)
+class MessageQuery:
+    direction: Literal["forward", "backward"]
+    start: datetime | None
+    end: datetime | None
+    boundary_id: int | None  # forward: ids > it; backward: ids < it
+    topic_id: int | None
+    from_me: bool
+    limit: int
