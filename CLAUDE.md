@@ -18,4 +18,4 @@ Read `docs/design.md` only in the sections the brief points to.
 - `uv sync`: install deps
 - `uv run pytest -q`: test suite
 - `uv run tg-bridge`: stdio MCP server (LM Studio launches it; it waits for MCP on stdin)
-- `uv run python -m tg_bridge.login`: interactive login (humans only: needs the real account)
+- `uv run python -m tg_bridge.login [--method qr|code]`: interactive login (humans only: needs the real account)

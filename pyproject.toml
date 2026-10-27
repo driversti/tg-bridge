@@ -7,6 +7,7 @@ dependencies = [
     "telethon>=1.45,<2",
     "mcp>=2.3,<3",
     "python-dotenv>=1.0",
+    "qrcode>=8.2",
 ]
 
 [project.scripts]

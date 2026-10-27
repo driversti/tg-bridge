@@ -19,3 +19,7 @@ class RateLimitedError(TgBridgeError):
     def __init__(self, seconds: int):
         super().__init__(f"Telegram rate limit: retry in {seconds} s")
         self.seconds = seconds
+
+
+class LoginError(TgBridgeError):
+    """Telegram refused the interactive login (bad phone number, banned number, …)."""

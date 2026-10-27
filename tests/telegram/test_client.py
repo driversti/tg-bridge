@@ -139,3 +139,15 @@ async def test_unauthorized_client_is_dropped_so_next_connect_rereads_session(se
     await tg.connect()
 
     assert factory.built == 2
+
+
+async def test_client_identifies_as_tg_bridge(wrapper):
+    from importlib.metadata import version
+
+    tg, fake = wrapper
+    await tg.connect()
+
+    assert fake.kwargs["device_model"] == "tg-bridge"
+    assert fake.kwargs["app_version"] == version("tg-bridge")
+    # OS name only: no kernel version or CPU architecture leaks into Settings → Devices.
+    assert fake.kwargs["system_version"] in {"macOS", "Linux", "Windows"}

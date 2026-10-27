@@ -14,6 +14,7 @@ from telethon.errors import FloodError
 from tg_bridge.config import Settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
 from tg_bridge.source import Person
+from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import person_from_user
 
 log = logging.getLogger(__name__)
@@ -36,7 +37,11 @@ class ReadOnlyTelegram:
         if self._client is None:
             # receive_updates=False: we never need the update stream; it keeps the session passive.
             self._client = self._client_factory(
-                str(session), self._settings.api_id, self._settings.api_hash, receive_updates=False
+                str(session),
+                self._settings.api_id,
+                self._settings.api_hash,
+                receive_updates=False,
+                **client_identity(),
             )
         await self._call(self._client.connect)
         if not await self._call(self._client.is_user_authorized):

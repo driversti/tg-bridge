@@ -29,9 +29,17 @@ Agents: never echo, log or commit these values.
 
 ## 2. First login (interactive)
 
-`uv run python -m tg_bridge.login` asks for phone, code and 2FA password, and creates
-`~/.config/tg-bridge/tg-bridge.session` (`600`). It shows up as a new device in
-Telegram → Settings → Devices, where you can revoke it at any time.
+`uv run python -m tg_bridge.login` asks how to log in and creates
+`~/.config/tg-bridge/tg-bridge.session` (`600`):
+
+- **QR code** (default, `--method qr`): scan the QR shown in the terminal with Telegram on your
+  phone (Settings → Devices → Link Desktop Device). No login code is needed. Recommended:
+  Telegram sometimes doesn't deliver login codes to third-party apps at all.
+- **Login code** (`--method code`): enter your phone number; the script says where Telegram sent
+  the code (Telegram app, SMS, call, email) and lets you resend it by pressing Enter.
+
+Either way, a two-step verification password is asked if you have one. The session shows up as
+a new device in Telegram → Settings → Devices, where you can revoke it at any time.
 
 ## 3. LM Studio
 
