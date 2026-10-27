@@ -92,3 +92,15 @@ accepted (design §3).
 
 Observed during the feature 00 smoke test (LM Studio 0.4.26): while the server ran, contacts
 saw "last seen <time>", not "online". A tool call may bump "last seen"; not investigated further.
+
+## 7. Performance
+
+LM Studio starts a fresh server process for every chat message, so in-memory caches don't help.
+The dialog list (888 dialogs: ~2.5–3 s to fetch) is therefore cached on disk for 5 minutes in
+`~/.config/tg-bridge/tg-bridge.dialogs.json` (file `600`, next to the session). It contains chat
+titles, usernames and visible phones: treat it like the session file. Deleting it is always safe.
+After logging in as a different account, delete it or wait 5 minutes.
+
+Most of the waiting is the model, not the bridge. On this Mac a dense 27B model (`qwen3.6-27b`)
+read a 4k-token tool result at ~94 tok/s (~46 s). Prefer MoE models (now `google/gemma-4-26b-a4b-qat`),
+and keep tool output short: `list_chats` prints totals per kind (plus public/private groups and channels, so the model never subtracts) on line 2, so "how many" questions need `limit=1`.

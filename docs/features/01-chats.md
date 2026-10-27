@@ -16,5 +16,5 @@ The model can find any dialog (personal, group, channel, archived) and identify 
 - From LM Studio: "show my chats with 'family' in the name" works.
 
 ## Smoke checklist (manual, real account)
-- [ ] A private group and a private channel appear in the list.
-- [ ] An ambiguous name returns candidates instead of a guess.
+- [x] A private group and a private channel appear in the list.
+- [x] An ambiguous name returns candidates instead of a guess.

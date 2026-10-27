@@ -1,18 +1,47 @@
-from tests.fakes import FakeSource
-from tg_bridge.errors import RateLimitedError
+import pytest
+
+from tests.fakes import FakeSource, make_chat
+from tests.test_config import CREDS
+from tg_bridge.config import load_settings
 from tg_bridge.server import build_server
 
 
-async def test_lists_whoami_tool():
-    tools = await build_server(FakeSource()).list_tools()
-
-    assert [t.name for t in tools] == ["whoami"]
-    assert tools[0].annotations.read_only_hint is True
+@pytest.fixture
+def settings(tmp_path):
+    return load_settings(env=CREDS, config_file=tmp_path / "c")
 
 
-async def test_call_whoami_returns_plain_text():
-    result = await build_server(FakeSource()).call_tool("whoami", {})
+async def test_lists_tools(settings):
+    tools = await build_server(FakeSource(), settings).list_tools()
+
+    assert sorted(t.name for t in tools) == ["get_chat_info", "list_chats", "whoami"]
+    assert all(t.annotations.read_only_hint is True for t in tools)
+
+
+async def test_call_whoami_returns_plain_text(settings):
+    result = await build_server(FakeSource(), settings).call_tool("whoami", {})
 
     assert result.is_error is False
     assert [c.text for c in result.content] == ["Anna K (@anna_k), id 42"]
     assert result.structured_content is None
+
+
+async def test_call_list_chats_returns_tools_layer_text(settings):
+    source = FakeSource(dialogs=[make_chat(id=-1, title="Family"), make_chat(id=-2, title="Work")])
+
+    result = await build_server(source, settings).call_tool("list_chats", {"query": "family"})
+
+    assert result.is_error is False
+    assert [c.text for c in result.content] == [
+        'Chats matching "family" (1 shown of 1)\n'
+        "Totals: 1 supergroup · 1 private\n"
+        "-1 · supergroup · Family · last 2026-10-25 13:03"
+    ]
+
+
+async def test_call_get_chat_info(settings):
+    source = FakeSource(dialogs=[make_chat(id=-1, title="Family")])
+
+    result = await build_server(source, settings).call_tool("get_chat_info", {"chat": "family"})
+
+    assert result.content[0].text.startswith("Family — supergroup")
