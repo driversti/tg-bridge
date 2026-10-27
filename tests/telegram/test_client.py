@@ -9,8 +9,9 @@ from tests.fakes import make_chat, make_person, make_user_chat
 from tests.test_config import CREDS
 from tg_bridge.config import load_settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
+from tg_bridge.source import MessageQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
-from tests.telegram.test_mapping import forum_topic, tl_channel, tl_user, user
+from tests.telegram.test_mapping import forum_topic, tl_channel, tl_msg, tl_user, user
 
 
 class FakeTelethonClient:
@@ -28,6 +29,14 @@ class FakeTelethonClient:
         self.request_errors: dict[str, Exception] = {}
         self.input_entity_ids: list[int] = []
         self.unknown_entities = 0
+        self.messages: list = []  # tl messages iter_messages yields, in the order given
+        self.iter_messages_calls: list[tuple] = []  # (entity, kwargs)
+        self.iter_messages_fail_after: tuple[int, Exception] | None = None
+
+    def __getattr__(self, name):  # only reached for attributes the fake does not define
+        if name == "send_read_acknowledge":
+            raise AssertionError("read receipts must never be sent")
+        raise AttributeError(name)
 
     async def connect(self):
         self.calls.append("connect")
@@ -51,6 +60,13 @@ class FakeTelethonClient:
             raise self.iter_dialogs_error
         for d in self.dialogs:
             yield d
+
+    async def iter_messages(self, entity, *args, **kwargs):
+        self.iter_messages_calls.append((entity, kwargs))
+        for i, m in enumerate(self.messages):
+            if self.iter_messages_fail_after and i == self.iter_messages_fail_after[0]:
+                raise self.iter_messages_fail_after[1]
+            yield m
 
     async def get_input_entity(self, peer):
         self.input_entity_ids.append(peer)
@@ -158,7 +174,7 @@ async def test_flood_wait_becomes_rate_limited(wrapper):
 def test_public_surface_is_read_only():
     public = {n for n in dir(ReadOnlyTelegram) if not n.startswith("_")}
 
-    assert public == {"connect", "get_me", "disconnect", "list_dialogs", "get_chat_details"}
+    assert public == {"connect", "get_me", "disconnect", "list_dialogs", "get_chat_details", "get_messages"}
 
 
 async def test_unauthorized_client_is_dropped_so_next_connect_rereads_session(settings):
@@ -332,3 +348,130 @@ async def test_only_read_requests_used(wrapper):
         await tg.get_chat_details(chat)
 
     assert {type(r).__name__ for r in fake.requests} <= ALLOWED_REQUESTS
+
+
+# --- messages ------------------------------------------------------------------
+
+
+def at(day, hour=12, minute=0):
+    return datetime(2026, 10, day, hour, minute)  # naive: how Telethon hands out UTC
+
+
+def aware(day, hour=12, minute=0):
+    return datetime(2026, 10, day, hour, minute, tzinfo=UTC)
+
+
+def query(**overrides) -> MessageQuery:
+    fields = dict(direction="forward", start=None, end=None, boundary_id=None, topic_id=None, from_me=False, limit=100)
+    fields.update(overrides)
+    return MessageQuery(**fields)
+
+
+async def read(wrapper, messages, q):
+    tg, fake = wrapper
+    fake.messages = messages
+    await tg.connect()
+    return await tg.get_messages(make_chat(), q)
+
+
+async def test_client_built_with_flood_threshold_30(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+
+    assert fake.kwargs["flood_sleep_threshold"] == 30
+
+
+async def test_forward_query_kwargs(wrapper):
+    await read(wrapper, [], query(start=aware(25)))
+    await read(wrapper, [], query(start=aware(25), boundary_id=50))
+
+    (_, first), (_, second) = wrapper[1].iter_messages_calls
+    assert (first["reverse"], first["offset_date"], first["offset_id"], first["limit"]) == (True, aware(25), 0, None)
+    assert second["offset_id"] == 50
+
+
+async def test_backward_query_kwargs(wrapper):
+    await read(wrapper, [], query(direction="backward", end=aware(25)))
+    await read(wrapper, [], query(direction="backward", end=aware(25), boundary_id=50))
+
+    (_, first), (_, second) = wrapper[1].iter_messages_calls
+    assert (first["reverse"], first["offset_date"], first["offset_id"]) == (False, aware(25), 0)
+    assert second["offset_id"] == 50
+
+
+async def test_from_me_uses_from_user_me(wrapper):
+    await read(wrapper, [], query(from_me=True))
+
+    assert wrapper[1].iter_messages_calls[0][1]["from_user"] == "me"
+
+
+async def test_topic_uses_reply_to_and_filters_out_client_side(wrapper):
+    msgs = [tl_msg(1, "mine", out=True), tl_msg(2, "theirs"), tl_msg(3, "mine too", out=True)]
+
+    result = await read(wrapper, msgs, query(topic_id=12, from_me=True))
+
+    kwargs = wrapper[1].iter_messages_calls[0][1]
+    assert kwargs["reply_to"] == 12 and "from_user" not in kwargs
+    assert [m.id for m in result] == [1, 3]
+
+
+async def test_forward_stops_at_end(wrapper):
+    msgs = [tl_msg(1, date=at(25)), tl_msg(2, date=at(26)), tl_msg(3, date=at(27))]
+
+    result = await read(wrapper, msgs, query(start=aware(25), end=aware(27)))
+
+    assert [m.id for m in result] == [1, 2]
+
+
+async def test_backward_stops_before_start(wrapper):
+    msgs = [tl_msg(3, date=at(27)), tl_msg(2, date=at(26)), tl_msg(1, date=at(25))]
+
+    result = await read(wrapper, msgs, query(direction="backward", start=aware(26)))
+
+    assert [m.id for m in result] == [3, 2]
+
+
+async def test_skips_messages_before_start_in_forward(wrapper):
+    msgs = [tl_msg(1, date=at(24)), tl_msg(2, date=at(26))]
+
+    result = await read(wrapper, msgs, query(start=aware(25)))
+
+    assert [m.id for m in result] == [2]
+
+
+async def test_stops_at_limit(wrapper):
+    result = await read(wrapper, [tl_msg(i) for i in range(1, 10)], query(limit=3))
+
+    assert [m.id for m in result] == [1, 2, 3]
+
+
+async def test_message_empty_skipped(wrapper):
+    msgs = [tl_msg(1), tl.MessageEmpty(id=2, peer_id=tl.PeerChannel(10)), tl_msg(3)]
+
+    assert [m.id for m in await read(wrapper, msgs, query())] == [1, 3]
+
+
+async def test_flood_mid_iteration_becomes_rate_limited(wrapper):
+    tg, fake = wrapper
+    fake.iter_messages_fail_after = (2, FloodWaitError(request=None, capture=45))
+
+    with pytest.raises(RateLimitedError) as exc:
+        await read(wrapper, [tl_msg(1), tl_msg(2), tl_msg(3)], query())
+
+    assert exc.value.seconds == 45
+
+
+async def test_get_messages_cold_entity_cache(wrapper):
+    tg, fake = wrapper
+    fake.unknown_entities = 1
+
+    result = await read(wrapper, [tl_msg(1)], query())
+
+    assert [m.id for m in result] == [1]
+    assert fake.iter_messages_calls[0][0] == "input:-1001234567890"
+
+
+async def test_no_read_acknowledge(wrapper):
+    await read(wrapper, [tl_msg(1)], query())  # the fake raises AssertionError if send_read_acknowledge is touched
+
+    assert "send_read_acknowledge" not in wrapper[1].calls

@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Person
+from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person
 from tg_bridge.telegram.client import ReadOnlyTelegram
 
 log = logging.getLogger(__name__)
@@ -81,6 +81,10 @@ class LiveSource:
     async def get_chat_info(self, chat: Chat) -> ChatInfo:
         await self._ensure_connected()
         return await self._telegram.get_chat_details(chat)
+
+    async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
+        await self._ensure_connected()
+        return await self._telegram.get_messages(chat, query)
 
     async def close(self) -> None:
         async with self._lock:

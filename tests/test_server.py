@@ -14,7 +14,7 @@ def settings(tmp_path):
 async def test_lists_tools(settings):
     tools = await build_server(FakeSource(), settings).list_tools()
 
-    assert sorted(t.name for t in tools) == ["get_chat_info", "list_chats", "whoami"]
+    assert sorted(t.name for t in tools) == ["get_chat_info", "get_messages", "list_chats", "whoami"]
     assert all(t.annotations.read_only_hint is True for t in tools)
 
 
@@ -45,3 +45,23 @@ async def test_call_get_chat_info(settings):
     result = await build_server(source, settings).call_tool("get_chat_info", {"chat": "family"})
 
     assert result.content[0].text.startswith("Family — supergroup")
+
+
+async def test_get_messages_tool_schema(settings):
+    tools = {t.name: t for t in await build_server(FakeSource(), settings).list_tools()}
+
+    props = tools["get_messages"].input_schema["properties"]
+    assert set(props) == {"chat", "days", "since", "until", "topic", "from_me", "cursor", "limit"}
+    assert tools["get_messages"].input_schema["required"] == ["chat"]
+
+
+async def test_call_get_messages(settings):
+    from tests.fakes import make_message
+
+    chat = make_chat(id=-1, title="Family")
+    source = FakeSource(dialogs=[chat], messages={-1: [make_message(id=7, chat_id=-1, text="hi there")]})
+
+    result = await build_server(source, settings).call_tool("get_messages", {"chat": "family"})
+
+    assert result.is_error is False
+    assert "#7 " in result.content[0].text and "hi there" in result.content[0].text

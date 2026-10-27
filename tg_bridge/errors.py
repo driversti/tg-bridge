@@ -46,3 +46,22 @@ class AmbiguousChatError(TgBridgeError):
         super().__init__("chat is ambiguous")
         self.arg = arg
         self.candidates = candidates
+
+
+class PeriodError(TgBridgeError):
+    """The period arguments of a read tool are invalid. The message tells the model how to fix them."""
+
+
+class CursorError(TgBridgeError):
+    """The paging cursor is garbled, from another version, or otherwise unusable."""
+
+    def __init__(self, other_chat: bool = False) -> None:
+        if other_chat:
+            # Models mix up cursors between chats; naming the mistake lets them fix it instead of starting over.
+            super().__init__(
+                "This cursor belongs to another chat. Use the cursor from this chat's last result, "
+                "or call get_messages again without cursor."
+            )
+        else:
+            super().__init__("Invalid cursor. Call get_messages again without cursor.")
+        self.other_chat = other_chat

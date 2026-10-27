@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from tg_bridge.source import Chat, ChatInfo, Person
+from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person
 
 
 def make_person(**overrides) -> Person:
@@ -47,6 +47,26 @@ def make_user_chat(person: Person | None = None, **overrides) -> Chat:
     return make_chat(**fields)
 
 
+def make_message(**overrides) -> Message:
+    fields = dict(
+        id=1,
+        chat_id=-1001234567890,
+        date=datetime(2026, 10, 26, 7, 12, tzinfo=UTC),
+        edit_date=None,
+        out=False,
+        sender=make_person(),
+        sender_title=None,
+        text="hello",
+        reply_to_id=None,
+        forward_from=None,
+        topic_id=None,
+        media=None,
+        action=None,
+    )
+    fields.update(overrides)
+    return Message(**fields)
+
+
 class FakeSource:
     """In-memory MessageSource."""
 
@@ -56,12 +76,15 @@ class FakeSource:
         error: Exception | None = None,
         dialogs: list[Chat] | None = None,
         infos: dict[int, ChatInfo] | None = None,
+        messages: dict[int, list[Message]] | None = None,
     ):
         self.me = me or make_person()
         self.error = error
         self.closed = False
         self.dialogs = list(dialogs or [])
         self.infos = dict(infos or {})
+        self.messages = {k: list(v) for k, v in (messages or {}).items()}
+        self.message_queries: list[MessageQuery] = []
         self.list_dialogs_calls: list[bool] = []  # the `refresh` flag of each call
 
     async def whoami(self) -> Person:
@@ -84,3 +107,25 @@ class FakeSource:
         return self.infos.get(chat.id) or ChatInfo(
             chat=chat, description=None, members_count=None, topics=(), topics_total=None
         )
+
+    async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
+        """Behaves like Telegram: direction, period, id boundary, topic and from_me are applied in plain Python."""
+        self.message_queries.append(query)
+        if self.error:
+            raise self.error
+        found = sorted(self.messages.get(chat.id, []), key=lambda m: m.id)
+        if query.start is not None:
+            found = [m for m in found if m.date >= query.start]
+        if query.end is not None:
+            found = [m for m in found if m.date < query.end]
+        if query.topic_id is not None:
+            found = [m for m in found if m.topic_id == query.topic_id]
+        if query.from_me:
+            found = [m for m in found if m.out]
+        if query.direction == "forward":
+            if query.boundary_id is not None:
+                found = [m for m in found if m.id > query.boundary_id]
+            return found[: query.limit]
+        if query.boundary_id is not None:
+            found = [m for m in found if m.id < query.boundary_id]
+        return found[::-1][: query.limit]

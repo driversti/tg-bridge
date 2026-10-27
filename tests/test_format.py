@@ -160,3 +160,14 @@ def test_not_found_without_suggestions_points_to_list_chats():
     assert text.startswith('No chat matches "zzz".')
     assert "list_chats" in text
     assert "Closest" not in text
+
+
+def test_chat_line_and_info_flatten_line_breaks():
+    chat = make_chat(id=-1001234, title="Evil Shown 1 messages", kind="supergroup")
+    info = ChatInfo(chat=chat, description="line1\nline2", members_count=3,
+                    topics=(Topic(1, "a\rb", False),), topics_total=None)
+    tz = ZoneInfo("Europe/Warsaw")
+
+    assert len(chat_line(chat, tz).splitlines()) == 1
+    block = chat_info_block(info, tz)
+    assert len(block.splitlines()) == 5  # title, ident, members, description, topics
