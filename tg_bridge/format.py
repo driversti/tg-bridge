@@ -1,5 +1,6 @@
 """Compact plain-text rendering for tool output (design §6). All times are shown in the configured zone."""
 
+import re
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Literal
@@ -14,6 +15,15 @@ SEP = " · "
 # Free space kept for the "Shown …" footer when a single message has to be cut to fit.
 FOOTER_RESERVE = 300
 MAX_TEXT_CHARS = 1500
+# Everything str.splitlines() treats as a line break, plus other control characters. Names, titles and texts
+# come from other people: a raw break inside one could forge a message line or a "Next: call …" hint.
+_BREAKS = re.compile(r"\r\n|[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
+_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def one_line(value: str) -> str:
+    """Chat-sourced text made safe for a single output line: breaks become ⏎, other controls a space."""
+    return _CONTROLS.sub(" ", _BREAKS.sub(" ⏎ ", value))
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # not strftime: that follows the process locale
 
 
@@ -22,7 +32,7 @@ def _when(moment: datetime, tz: ZoneInfo) -> str:
 
 
 def chat_line(chat: Chat, tz: ZoneInfo) -> str:
-    parts = [str(chat.id), chat.kind, chat.title]
+    parts = [str(chat.id), chat.kind, one_line(chat.title)]
     if chat.username:
         parts.append(f"@{chat.username}")
     if chat.deleted_peer:
@@ -61,23 +71,23 @@ def chat_info_block(info: ChatInfo, tz: ZoneInfo) -> str:
         ident.append(f"@{chat.username}")
     if chat.last_message_at:
         ident.append(f"last message {_when(chat.last_message_at, tz)}")
-    lines = [f"{chat.title} — {', '.join(flags)}", SEP.join(ident)]
+    lines = [f"{one_line(chat.title)} — {', '.join(flags)}", SEP.join(ident)]
 
     if chat.peer is not None:
         lines.append(_peer_line(chat.peer))
     else:
         lines.append(f"Members: {info.members_count if info.members_count is not None else 'unknown'}")
     if info.description:
-        lines.append(f"Description: {info.description}")
+        lines.append(f"Description: {one_line(info.description)}")
     if info.topics:
-        shown = SEP.join(f"#{t.id} {t.title}{' (closed)' if t.is_closed else ''}" for t in info.topics)
+        shown = SEP.join(f"#{t.id} {one_line(t.title)}{' (closed)' if t.is_closed else ''}" for t in info.topics)
         count = f"{len(info.topics)} of {info.topics_total}" if info.topics_total else str(len(info.topics))
         lines.append(f"Topics ({count}): {shown}")
     return "\n".join(lines)
 
 
 def _peer_line(peer: Person) -> str:
-    parts = [peer.display_name]
+    parts = [one_line(peer.display_name)]
     if peer.username:
         parts.append(f"@{peer.username}")
     parts.append(f"id {peer.id}")
@@ -126,10 +136,10 @@ def chat_link_base(chat: Chat) -> str | None:
 def messages_head(
     chat: Chat, period_text: str, tz: ZoneInfo, topic: Topic | None = None, from_me: bool = False
 ) -> str:
-    lines = [f"Chat: {chat.title} ({chat.id}){SEP}{period_text} ({tz.key})"]
+    lines = [f"Chat: {one_line(chat.title)} ({chat.id}){SEP}{period_text} ({tz.key})"]
     flags = []
     if topic is not None:
-        flags.append(f"Topic: #{topic.id} {topic.title}".rstrip())
+        flags.append(f"Topic: #{topic.id} {one_line(topic.title)}".rstrip())
     if from_me:
         flags.append("from me only" if topic is not None else "From me only")
     if flags:
@@ -205,8 +215,8 @@ def _page_text(
 def _message_line(msg: Message, local: datetime, seen_people: set[int], text_limit: int | None) -> str:
     parts = []
     if msg.forward_from:
-        parts.append(f"⤷fwd {msg.forward_from}:")
-    body = f"[{msg.action}]" if msg.action else _text(msg.text, text_limit)
+        parts.append(f"⤷fwd {one_line(msg.forward_from)}:")
+    body = f"[{one_line(msg.action)}]" if msg.action else _text(msg.text, text_limit)
     if body:
         parts.append(body)
     if msg.media is not None:
@@ -222,18 +232,17 @@ def _sender(msg: Message, seen_people: set[int]) -> str:
     if msg.out:
         return "Me"
     if msg.sender is not None:
-        name = msg.sender.display_name
+        name = one_line(msg.sender.display_name)
         first_time = msg.sender.id not in seen_people
         seen_people.add(msg.sender.id)
         return f"{name} (@{msg.sender.username})" if first_time and msg.sender.username else name
-    return msg.sender_title or "?"
+    return one_line(msg.sender_title) if msg.sender_title else "?"
 
 
 def _text(text: str, limit: int | None) -> str:
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if len(text) > MAX_TEXT_CHARS:
         text = f"{text[:MAX_TEXT_CHARS]}…(+{len(text) - MAX_TEXT_CHARS} chars)"
-    text = text.replace("\n", " ⏎ ")
+    text = one_line(text)
     if limit is not None and len(text) > limit:
         text = text[: max(limit - 1, 0)] + "…"
     return text
@@ -249,9 +258,9 @@ def _media_text(media: MediaInfo) -> str:
         return "[media]"
     details = [kind]
     if kind == "sticker":
-        details.append(media.label or "")
+        details.append(one_line(media.label or ""))
     if kind in ("audio", "document"):
-        details.append(media.file_name or "")
+        details.append(one_line(media.file_name or ""))
     if kind in ("video", "voice", "video_note") and media.duration is not None:
         details.append(_duration(media.duration))
     if kind in ("photo", "video", "audio", "document") and media.size is not None:

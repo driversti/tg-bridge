@@ -16,6 +16,7 @@ from tg_bridge.format import (
     chat_line,
     messages_head,
     not_found_text,
+    one_line,
     render_lines,
     render_page,
 )
@@ -198,7 +199,7 @@ async def _resolve_topic(source: MessageSource, chat: Chat, topic: str | int | N
     if topic is None or (isinstance(topic, str) and not topic.strip()):
         return None
     if not chat.is_forum:
-        raise ToolError(f'"{chat.title}" is not a forum; omit topic.')
+        raise ToolError(f'"{one_line(chat.title)}" is not a forum; omit topic.')
     raw = str(topic).strip().lstrip("#")
     if raw.isascii() and raw.isdigit():
         return Topic(int(raw), "", False)
@@ -217,5 +218,5 @@ async def _resolve_topic(source: MessageSource, chat: Chat, topic: str | int | N
 
 
 def _topic_list(topics: list[Topic]) -> str:
-    shown = "; ".join(f"#{t.id} {t.title}" for t in topics[:MAX_CANDIDATES])
+    shown = "; ".join(f"#{t.id} {one_line(t.title)}" for t in topics[:MAX_CANDIDATES])
     return shown + (f"; …and {len(topics) - MAX_CANDIDATES} more" if len(topics) > MAX_CANDIDATES else "")
