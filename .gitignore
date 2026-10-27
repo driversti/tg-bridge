@@ -1,0 +1,18 @@
+# Secrets & personal data — never commit
+*.session
+*.session-journal
+.env
+.env.*
+config.env
+exports/
+downloads/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS / IDE
+.DS_Store
+.idea/

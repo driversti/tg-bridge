@@ -1,0 +1,84 @@
+# Setup & deployment (stage 1: Mac)
+
+## 1. Credentials
+
+1. Create the private config dir and an empty config file, then lock both down
+   (the file must exist before `chmod` can set its mode):
+
+   ```bash
+   mkdir -p ~/.config/tg-bridge
+   chmod 700 ~/.config/tg-bridge
+   touch ~/.config/tg-bridge/config.env
+   chmod 600 ~/.config/tg-bridge/config.env
+   ```
+
+2. Get your own `api_id` / `api_hash` from Telegram, following the official guide
+   ([Obtaining api_id](https://core.telegram.org/api/obtaining_api_id)):
+   log in at <https://my.telegram.org> with your phone number → **API development tools** →
+   fill in the app form (any title/short name) → copy `App api_id` and `App api_hash`.
+   They identify *your* app, so treat them as secrets.
+
+3. Put them into `~/.config/tg-bridge/config.env`:
+
+   ```
+   TG_API_ID=<your api_id>
+   TG_API_HASH=<your api_hash>
+   ```
+
+Agents: never echo, log or commit these values.
+
+## 2. First login (interactive)
+
+`uv run python -m tg_bridge.login` asks for phone, code and 2FA password, and creates
+`~/.config/tg-bridge/tg-bridge.session` (`600`). It shows up as a new device in
+Telegram → Settings → Devices, where you can revoke it at any time.
+
+## 3. LM Studio
+
+Add to LM Studio's `mcp.json` (Program → Integrations → Edit mcp.json):
+
+```json
+{
+  "mcpServers": {
+    "tg-bridge": {
+      "command": "/opt/homebrew/bin/uv",
+      "args": ["--directory", "/absolute/path/to/tg-bridge", "run", "tg-bridge"]
+    }
+  }
+}
+```
+
+Use absolute paths: `which uv` for `command` (`/opt/homebrew/bin/uv` with Homebrew,
+`~/.local/bin/uv` with the official installer) and your clone's location in `args`.
+LM Studio is a GUI app and doesn't get your shell `PATH`.
+The server connects to Telegram only on the first tool call, so the tools list appears
+even before login. `whoami` then tells you to run step 2.
+
+- Model: a tool-calling model around 30B with a context of at least 32k. Candidates to
+  evaluate: Qwen3-30B-A3B, Qwen3-32B, Gemma 3 27B. Record results here.
+
+## 4. Configuration reference
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TG_API_ID`, `TG_API_HASH` | — | Telegram app credentials |
+| `TG_BRIDGE_SESSION` | `~/.config/tg-bridge/tg-bridge.session` | Session file |
+| `TG_BRIDGE_TZ` | `Europe/Warsaw` | Time zone for periods/output |
+| `TG_BRIDGE_MAX_CHARS` | `12000` | Per-tool-call output budget |
+| `TG_BRIDGE_EXPORT_DIR` | `~/tg-bridge-data/exports` | Markdown exports |
+| `TG_BRIDGE_DOWNLOAD_DIR` | `~/tg-bridge-data/downloads` | Downloaded media |
+
+## 5. Troubleshooting
+
+- MCP server shows no tools: something printed to stdout. All logs must go to stderr.
+- "Not logged in": rerun step 2.
+- FloodWait: Telegram rate limit, so wait the reported time.
+
+## 6. Online status
+
+What the code does to stay invisible: connects lazily (first tool call, not at startup),
+`receive_updates=False`, never calls `account.UpdateStatus`, never sends read receipts.
+Telegram may still show "online"/"last seen recently" while a connection is open; that is
+accepted (design §3).
+
+Observed during the feature 00 smoke test: _TBD_
