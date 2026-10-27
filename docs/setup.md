@@ -43,7 +43,8 @@ a new device in Telegram → Settings → Devices, where you can revoke it at an
 
 ## 3. LM Studio
 
-Add to LM Studio's `mcp.json` (Program → Integrations → Edit mcp.json):
+Add to LM Studio's `mcp.json`. The file is `~/.lmstudio/mcp.json`; edit it directly if you
+can't find the menu entry (it moves between LM Studio versions), then restart LM Studio:
 
 ```json
 {
@@ -89,4 +90,5 @@ What the code does to stay invisible: connects lazily (first tool call, not at s
 Telegram may still show "online"/"last seen recently" while a connection is open; that is
 accepted (design §3).
 
-Observed during the feature 00 smoke test: _TBD_
+Observed during the feature 00 smoke test (LM Studio 0.4.26): while the server ran, contacts
+saw "last seen <time>", not "online". A tool call may bump "last seen"; not investigated further.

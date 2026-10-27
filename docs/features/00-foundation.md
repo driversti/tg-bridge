@@ -23,6 +23,6 @@ A runnable, empty-but-real MCP server that LM Studio can launch, authenticated t
 - LM Studio lists the `tg-bridge` tools, and asking "who am I on Telegram?" returns the right account.
 
 ## Smoke checklist (manual, real account)
-- [ ] Login script works and the session file is `600`.
-- [ ] `whoami` from LM Studio returns the right account.
-- [ ] Note whether contacts see you "online" while the server runs (acceptable if unavoidable).
+- [x] Login script works and the session file is `600`.
+- [x] `whoami` from LM Studio returns the right account.
+- [x] Note whether contacts see you "online" while the server runs (acceptable if unavoidable).

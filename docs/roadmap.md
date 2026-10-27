@@ -18,7 +18,7 @@ pre-plan future features here.
 
 | # | Feature | Brief | Depends on | Status |
 |---|---|---|---|---|
-| 00 | Foundation: skeleton, config, login, read-only client, MCP server, `whoami` | [features/00-foundation.md](features/00-foundation.md) · [plan](plans/00-foundation.md) | — | [~] |
+| 00 | Foundation: skeleton, config, login, read-only client, MCP server, `whoami` | [features/00-foundation.md](features/00-foundation.md) · [plan](plans/00-foundation.md) | — | [x] |
 | 01 | Chats: `list_chats`, `get_chat_info`, chat resolution | [features/01-chats.md](features/01-chats.md) | 00 | [ ] |
 | 02 | Reading: `get_messages` + periods, budget, pagination | [features/02-reading.md](features/02-reading.md) | 01 | [ ] |
 | 03 | Search: `search_messages` | [features/03-search.md](features/03-search.md) | 02 | [ ] |
