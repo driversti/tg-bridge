@@ -205,7 +205,9 @@ async def test_client_identifies_as_tg_bridge(wrapper):
 
 # --- dialogs and chat details ------------------------------------------------
 
-ALLOWED_REQUESTS = {"GetFullUserRequest", "GetFullChatRequest", "GetFullChannelRequest", "GetForumTopicsRequest"}
+ALLOWED_REQUESTS = {
+    "GetFullUserRequest", "GetFullChatRequest", "GetFullChannelRequest", "GetForumTopicsRequest", "GetForumTopicsByIDRequest",
+}
 
 
 def dlg(entity, id, **kw):
@@ -303,6 +305,32 @@ async def test_chat_details_forum_lists_topics_and_total(wrapper):
     assert (req.offset_date, req.offset_id, req.offset_topic, req.limit) == (None, 0, 0, 100)
 
 
+async def test_chat_details_forum_fetches_general_when_page_omits_it(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.results["GetFullChannelRequest"] = full(about=None, participants_count=3)
+    fake.results["GetForumTopicsRequest"] = SimpleNamespace(count=2, topics=[forum_topic(id=23, title="Trips")])
+    fake.results["GetForumTopicsByIDRequest"] = SimpleNamespace(count=1, topics=[forum_topic(id=1, title="Загальне")])
+
+    info = await tg.get_chat_details(make_chat(is_forum=True))
+
+    assert [(t.id, t.title) for t in info.topics] == [(1, "Загальне"), (23, "Trips")]
+    assert fake.requests[-1].topics == [1]
+    assert info.topics_total is None
+
+
+async def test_chat_details_forum_lists_general_even_when_lookup_returns_nothing(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.results["GetFullChannelRequest"] = full(about=None, participants_count=3)
+    fake.results["GetForumTopicsRequest"] = SimpleNamespace(count=1, topics=[forum_topic(id=23, title="Trips")])
+    fake.results["GetForumTopicsByIDRequest"] = SimpleNamespace(count=0, topics=[])
+
+    info = await tg.get_chat_details(make_chat(is_forum=True))
+
+    assert [(t.id, t.title) for t in info.topics] == [(1, "General"), (23, "Trips")]
+
+
 async def test_chat_details_forum_total_none_when_all_fit(wrapper):
     tg, fake = wrapper
     await tg.connect()
@@ -344,6 +372,7 @@ async def test_only_read_requests_used(wrapper):
     fake.results["GetFullChatRequest"] = SimpleNamespace(full_chat=SimpleNamespace(about=None), chats=[])
     fake.results["GetFullUserRequest"] = SimpleNamespace(full_user=SimpleNamespace(about=None))
     fake.results["GetForumTopicsRequest"] = SimpleNamespace(count=0, topics=[])
+    fake.results["GetForumTopicsByIDRequest"] = SimpleNamespace(count=0, topics=[])
     for chat in (make_chat(is_forum=True), make_chat(id=-5, kind="group"), make_user_chat()):
         await tg.get_chat_details(chat)
 
@@ -413,6 +442,53 @@ async def test_topic_uses_reply_to_and_filters_out_client_side(wrapper):
     kwargs = wrapper[1].iter_messages_calls[0][1]
     assert kwargs["reply_to"] == 12 and "from_user" not in kwargs
     assert [m.id for m in result] == [1, 3]
+
+
+def in_topic(topic_id, reply_to_msg_id=None):
+    return tl.MessageReplyHeader(
+        forum_topic=True,
+        reply_to_msg_id=reply_to_msg_id or topic_id,
+        reply_to_top_id=topic_id if reply_to_msg_id else None,
+    )
+
+
+def topic_created(id, title):
+    return tl.MessageService(
+        id=id, peer_id=tl.PeerChannel(10), date=at(25), action=tl.MessageActionTopicCreate(title=title, icon_color=0)
+    )
+
+
+async def test_general_topic_reads_history_and_keeps_messages_outside_other_topics(wrapper):
+    msgs = [
+        tl_msg(1, "old, pre-forum"),
+        topic_created(2, "Trips"),
+        tl_msg(3, "in Trips", reply_to=in_topic(2)),
+        tl_msg(4, "General"),
+        tl_msg(5, "reply in Trips", reply_to=in_topic(2, reply_to_msg_id=3)),
+        tl_msg(6, "reply in General", reply_to=tl.MessageReplyHeader(reply_to_msg_id=4)),
+    ]
+
+    result = await read(wrapper, msgs, query(topic_id=1))
+
+    kwargs = wrapper[1].iter_messages_calls[0][1]
+    assert "reply_to" not in kwargs  # GetReplies(msg_id=1) returns nothing: General is no reply thread
+    assert [m.id for m in result] == [1, 4, 6]
+
+
+async def test_general_topic_limit_counts_only_general_messages(wrapper):
+    msgs = [tl_msg(1), tl_msg(2, reply_to=in_topic(9)), tl_msg(3), tl_msg(4)]
+
+    result = await read(wrapper, msgs, query(topic_id=1, limit=2))
+
+    assert [m.id for m in result] == [1, 3]
+
+
+async def test_general_topic_pages_from_boundary_and_filters_from_me_server_side(wrapper):
+    result = await read(wrapper, [tl_msg(51, out=True)], query(topic_id=1, boundary_id=50, from_me=True))
+
+    kwargs = wrapper[1].iter_messages_calls[0][1]
+    assert (kwargs["offset_id"], kwargs["from_user"]) == (50, "me")
+    assert [m.id for m in result] == [51]
 
 
 async def test_forward_stops_at_end(wrapper):
