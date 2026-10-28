@@ -18,9 +18,9 @@ Find messages by text in one chat or across all chats. Scenario 1.
 - From LM Studio: "find in my chat with B when I mentioned my address" returns hits with dates.
 
 ## Smoke checklist (manual, real account)
-- [ ] Per-chat and global search both return results.
-- [ ] Ukrainian/Russian/Polish text is found.
-- [ ] Paging: page 2 of a global search has no duplicates or gaps against page 1 (validates the `offset_rate` = date choice).
-- [ ] A hit inside an **archived** chat shows up in global search (if not: note it; `folder_id=1` would need a second request).
-- [ ] `get_messages(around=<hit id>)` from a search result shows the context with `▶` on the hit.
-- [ ] Global `from_me` finds an old message of yours.
+- [x] Per-chat and global search both return results.
+- [x] Ukrainian/Russian/Polish text is found.
+- [x] Paging: page 2 of a global search has no duplicates or gaps against page 1 (validates the `offset_rate` = date choice).
+- [x] A hit inside an **archived** chat shows up in global search (if not: note it; `folder_id=1` would need a second request).
+- [x] `get_messages(around=<hit id>)` from a search result shows the context with `▶` on the hit.
+- [x] Global `from_me` finds an old message of yours.

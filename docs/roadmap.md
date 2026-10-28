@@ -21,7 +21,7 @@ pre-plan future features here.
 | 00 | Foundation: skeleton, config, login, read-only client, MCP server, `whoami` | [features/00-foundation.md](features/00-foundation.md) · [plan](plans/00-foundation.md) | — | [x] |
 | 01 | Chats: `list_chats`, `get_chat_info`, chat resolution | [features/01-chats.md](features/01-chats.md) · [plan](plans/01-chats.md) | 00 | [x] |
 | 02 | Reading: `get_messages` + periods, budget, pagination | [features/02-reading.md](features/02-reading.md) · [plan](plans/02-reading.md) | 01 | [x] |
-| 03 | Search: `search_messages` | [features/03-search.md](features/03-search.md) · [plan](plans/03-search.md) | 02 | [~] |
+| 03 | Search: `search_messages` | [features/03-search.md](features/03-search.md) · [plan](plans/03-search.md) | 02 | [x] |
 | 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) | 02 | [ ] |
 | 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) | 02 | [ ] |
@@ -44,3 +44,6 @@ _(deviations from design, one line each)_
 - 01: dialog cache is on disk (5 min TTL), not per process: LM Studio restarts the server for every message (design §11 said "cached per process").
 - 02: chat link base shown once in the page header ("Links:") instead of a per-message Message.link; days shown under day headers.
 - 02: cursor is a short readable token (`f6782037_s1792969200_c795`) instead of base64 JSON: the smoke test caught a ~30B model splicing an earlier chat's id into a cursor. The footer now says "…remain… Next: call get_messages(…)" because the model stopped after page 1.
+- 03: `get_messages` gained `around=<id>` so the model can read the context of a search hit; global search resumes from the boundary hit's date as `offset_rate` (smoke: 90 hits in one call = 3 pages of 30).
+- 03: a short `SearchGlobal` page is not the end (Telegram drops hidden hits); only an empty page or a non-slice answer is.
+- 03: global `from_me` uses `messages.Search` on `inputPeerEmpty` with `from_id=self` (server-side) instead of the plan's client-side filter with a 500-hit scan cap, which covered only ~10 days for channel-heavy words. In the smoke test it missed 1 of 21 own hits (a 2021 supergroup message, cause unknown).
