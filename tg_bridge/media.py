@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass
@@ -21,15 +22,19 @@ DOWNLOADABLE = frozenset({"photo", "video", "gif", "voice", "audio", "video_note
 DOWNLOAD_TIME_BUDGET = 40.0
 MAX_NAME_CHARS = 120
 MAX_SUFFIX = 99
-# Unlike export._STRIP this also drops \n and \t: a file name has no use for them.
-_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# Control, format (bidi overrides, zero-width), surrogate, private-use and unassigned characters: they can make a
+# name look like another one ("invoice\u202efdp.exe" shows as "invoiceexe.pdf"). Unlike export._STRIP, \n and \t go too.
+_UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+# The sender's client chooses mime_type; anything but a plain type/subtype is not shown to the model.
+_MIME = re.compile(r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}")
 
 
 def safe_name(name: str | None) -> str | None:
     """A file name Telegram gave us, made harmless: no separators, control characters or leading dots/spaces."""
     if not name:
         return None
-    cleaned = _UNSAFE.sub("", name.replace("/", "").replace("\\", "")).lstrip(". ").rstrip()
+    kept = (ch for ch in name if ch not in "/\\" and unicodedata.category(ch) not in _UNSAFE_CATEGORIES)
+    cleaned = "".join(kept).lstrip(". ").rstrip()
     if not cleaned:
         return None
     if len(cleaned) > MAX_NAME_CHARS:
@@ -38,6 +43,11 @@ def safe_name(name: str | None) -> str | None:
             stem, ext = cleaned, ""
         cleaned = stem[: MAX_NAME_CHARS - len(ext)] + ext
     return cleaned
+
+
+def safe_mime(mime: str | None) -> str | None:
+    """The mime type when it is a plain type/subtype, else None."""
+    return mime if mime and _MIME.fullmatch(mime) else None
 
 
 @dataclass(frozen=True)

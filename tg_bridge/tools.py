@@ -45,7 +45,7 @@ from tg_bridge.format import (
     search_head,
     size_text,
 )
-from tg_bridge.media import DownloadResult, SavedFile, download_message_media
+from tg_bridge.media import DownloadResult, SavedFile, download_message_media, safe_mime
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
 from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
 from tg_bridge.timerange import Period, describe_period, parse_period
@@ -479,10 +479,10 @@ def _download_text(result: DownloadResult, who: str, message_id: int, call: str)
 
 
 def _size_and_mime(saved: SavedFile) -> str:
-    return f"{size_text(saved.path.stat().st_size)}, {saved.file.media.mime_type or 'unknown type'}"
+    return f"{size_text(saved.path.stat().st_size)}, {safe_mime(saved.file.media.mime_type) or 'unknown type'}"
 
 
 def _album_line(saved: SavedFile) -> str:
     size = size_text(saved.path.stat().st_size)
-    line = f"{saved.path}{SEP}{size}{SEP}{saved.file.media.mime_type or 'unknown type'}"
+    line = f"{saved.path}{SEP}{size}{SEP}{safe_mime(saved.file.media.mime_type) or 'unknown type'}"
     return line + " (already there)" if saved.existed else line

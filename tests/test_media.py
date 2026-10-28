@@ -83,6 +83,10 @@ async def test_document_keeps_original_name_with_id_prefix(tmp_path):
         ("", None),
         (None, None),
         ("a\x00b\nc\x7f.txt", "abc.txt"),
+        # Bidi overrides and zero-width characters would make "invoice\u202efdp.exe" look like "invoiceexe.pdf".
+        ("invoice\u202efdp.exe", "invoicefdp.exe"),
+        ("a\u200bb\u2066c\ufeff.pdf", "abc.pdf"),
+        ("\u202e", None),
     ],
 )
 def test_safe_name(raw, expected):
