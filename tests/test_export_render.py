@@ -94,6 +94,15 @@ def test_links_in_header_and_media_line():
     assert "[document · a.pdf · 2KB · https://t.me/c/1234567890/7]" in out
 
 
+def test_ids_are_links_when_the_chat_has_them():
+    chat = make_chat()  # supergroup -1001234567890
+    msg = make_message(id=7, text="hi", reply_to_id=5)
+
+    out = render_all(chat, [msg], info_of(chat))
+
+    assert "** [#7](https://t.me/c/1234567890/7) ↩[#5](https://t.me/c/1234567890/5)\n" in out
+
+
 def test_group_header_has_members_and_no_peer_line():
     chat = make_chat(kind="group", id=-5, title="Chess", is_forum=False)
 
@@ -177,8 +186,8 @@ def test_forum_topic_marker():
 
     out = render_messages([make_message(id=5, topic_id=9), make_message(id=6)], chat, W, RenderState())
 
-    assert "#5 topic #9\n" in out
-    assert "#6\n" in out
+    assert "[#5](https://t.me/c/1234567890/5) topic #9\n" in out
+    assert "[#6](https://t.me/c/1234567890/6)\n" in out
 
 
 def test_service_message_and_media_label():

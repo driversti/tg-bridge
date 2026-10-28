@@ -130,11 +130,11 @@ def render_messages(messages: Sequence[Message], chat: Chat, tz: ZoneInfo, state
 
 
 def _message_block(msg: Message, chat: Chat, local: datetime, base: str | None, state: RenderState) -> str:
-    head = f"**{local:%H:%M} {_sender(msg, state)}** #{msg.id}"
+    head = f"**{local:%H:%M} {_sender(msg, state)}** {_ref(msg.id, base)}"
     if chat.is_forum and msg.topic_id:
         head += f" topic #{msg.topic_id}"
     if msg.reply_to_id is not None:
-        head += f" ↩#{msg.reply_to_id}"
+        head += f" ↩{_ref(msg.reply_to_id, base)}"
     if msg.forward_from:
         head += f" ⤷fwd {_inline(msg.forward_from)}"
     if msg.edit_date is not None:
@@ -148,6 +148,11 @@ def _message_block(msg: Message, chat: Chat, local: datetime, base: str | None, 
     if msg.media is not None:
         lines.append(_media_line(msg.media, f"{base}/{msg.id}" if base else None))
     return "\n".join(lines) + "\n\n"
+
+
+def _ref(message_id: int, base: str | None) -> str:
+    # A clickable #id where Telegram has message links (supergroups, channels).
+    return f"[#{message_id}]({base}/{message_id})" if base else f"#{message_id}"
 
 
 def _sender(msg: Message, state: RenderState) -> str:
