@@ -12,6 +12,7 @@ from typing import Any
 from telethon import TelegramClient
 from telethon.errors import FloodError, RPCError
 from telethon.tl import functions
+from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
@@ -22,6 +23,8 @@ from tg_bridge.telegram.mapping import chat_from_dialog, message_from_tl, person
 log = logging.getLogger(__name__)
 
 TOPICS_LIMIT = 100
+# Every forum has it. Unlike other topics it is no reply thread: its messages carry no topic header.
+GENERAL_TOPIC_ID = 1
 # Telethon sleeps through FloodWaits up to this long itself; longer ones surface as RateLimitedError.
 FLOOD_SLEEP_THRESHOLD = 30
 
@@ -119,7 +122,12 @@ class ReadOnlyTelegram:
             "offset_id": query.boundary_id or 0,  # takes priority over offset_date; forward means "ids greater than"
         }
         client_side_from_me = False
-        if query.topic_id is not None:
+        general_only = query.topic_id == GENERAL_TOPIC_ID
+        if general_only:
+            # GetReplies(msg_id=1) returns nothing, so read the whole history and drop other topics' messages below.
+            if query.from_me:
+                kwargs["from_user"] = "me"
+        elif query.topic_id is not None:
             kwargs["reply_to"] = query.topic_id
             # With reply_to Telethon silently drops from_user, so the filter happens below.
             client_side_from_me = query.from_me
@@ -134,6 +142,8 @@ class ReadOnlyTelegram:
             async for raw in client.iter_messages(entity, **kwargs):
                 msg = message_from_tl(raw, chat.id)
                 if msg is None:
+                    continue
+                if general_only and not _in_general(raw, msg):
                     continue
                 if forward:
                     if query.end is not None and msg.date >= query.end:
@@ -173,7 +183,16 @@ class ReadOnlyTelegram:
         )
         result = await self._call(lambda: client(request))
         topics = [t for t in map(topic_from_forum_topic, result.topics) if t is not None]
+        if not any(t.id == GENERAL_TOPIC_ID for t in topics):
+            # The page is sorted by activity, so a quiet General can fall outside it; it is readable all the same.
+            topics.insert(0, await self._general_topic(client, entity))
         return topics, (result.count if result.count > len(topics) else None)
+
+    async def _general_topic(self, client: Any, entity: Any) -> Topic:
+        request = functions.messages.GetForumTopicsByIDRequest(peer=entity, topics=[GENERAL_TOPIC_ID])
+        result = await self._call(lambda: client(request))
+        found = [t for t in map(topic_from_forum_topic, result.topics) if t is not None and t.id == GENERAL_TOPIC_ID]
+        return found[0] if found else Topic(GENERAL_TOPIC_ID, "General", False)
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -192,3 +211,8 @@ class ReadOnlyTelegram:
             seconds = int(getattr(e, "seconds", 0) or 0)
             log.warning("telegram flood wait: %d s", seconds)
             raise RateLimitedError(seconds) from e
+
+
+def _in_general(raw: Any, msg: Message) -> bool:
+    # A topic's creation message is its thread root and has no topic header, yet belongs to that topic.
+    return msg.topic_id is None and not isinstance(getattr(raw, "action", None), tl.MessageActionTopicCreate)

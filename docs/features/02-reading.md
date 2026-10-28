@@ -21,6 +21,7 @@ Read any chat chronologically for a period, in a form a ~30B local model can con
 - [x] The unread counter in the Telegram app doesn't change after reading.
 - [x] A busy group returns `next_cursor` and the model continues paging.
 - [x] Forum: topic by title and by id; topic #1 (General) works or gives a readable error.
+- [x] Forum: `get_chat_info` lists #1 General; `topic=1` (and `topic="General"`) returns General's messages, none from other topics, and `next_cursor` pages on in General.
 - [x] since="yesterday" until="yesterday" returns only yesterday.
 - [x] LM Studio shows the full ~12 000-char result (design §11; if it truncates, lower TG_BRIDGE_MAX_CHARS default).
 - [ ] A FloodWait (if one happens) is reported as "retry in N s".
