@@ -126,19 +126,13 @@ async def test_global_hit_in_unknown_chat(settings):
     assert "— chat 555 —" in out and hit_ids(out) == [1]
 
 
-async def test_scan_cap_still_offers_next(settings):
-    msgs = [hit(A, i, i, out=(i == 6)) for i in range(1, 11)]  # newest first: 10..1; own hit is #6
-    src = FakeSource(dialogs=[A], messages={A.id: msgs}, scan_cap=5)
-    out = await tools.search_messages(src, settings, "адреса", from_me=True)
-    assert hit_ids(out) == [6] and "Scanned 500 hits, more may remain." in out
-    out2 = await tools.search_messages(src, settings, "адреса", cursor=cursor_of(out))
-    assert "#6" not in out2 and src.search_queries[-1][0].from_me  # from_me comes from the cursor
-
-
-async def test_scan_cap_with_no_hit_at_all_still_offers_next(settings):
-    src = FakeSource(dialogs=[A], messages={A.id: [hit(A, i, i) for i in range(1, 11)]}, scan_cap=5)
-    out = await tools.search_messages(src, settings, "адреса", from_me=True)
-    assert "Next: call search_messages" in out and "more may remain" in out
+async def test_global_from_me_pages_with_from_me_kept_in_cursor(settings):
+    msgs = [hit(A, i, i, out=(i % 2 == 0)) for i in range(1, 11)]  # own: 10, 8, 6, 4, 2
+    src = FakeSource(dialogs=[A], messages={A.id: msgs})
+    out = await tools.search_messages(src, settings, "адреса", from_me=True, limit=3)
+    assert hit_ids(out) == [10, 8, 6] and "Scanned" not in out
+    out2 = await tools.search_messages(src, settings, "адреса", cursor=cursor_of(out), limit=3)
+    assert hit_ids(out2) == [4, 2] and src.search_queries[-1][0].from_me  # from_me comes from the cursor
 
 
 async def test_no_hits(settings):

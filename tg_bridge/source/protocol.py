@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person, SearchPage, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person, SearchQuery
 
 
 class MessageSource(Protocol):
@@ -26,6 +26,7 @@ class MessageSource(Protocol):
         """At most `query.limit` messages of one resolved chat, in the query's direction (forward = ascending ids)."""
         ...
 
-    async def search_messages(self, query: SearchQuery, chat: Chat | None) -> SearchPage:
-        """Text hits, newest first; `chat=None` searches all the user's dialogs."""
+    async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
+        """At most `query.limit` text hits, newest first (Message.chat_id is the hit's chat); `chat=None` searches all
+        the user's dialogs."""
         ...

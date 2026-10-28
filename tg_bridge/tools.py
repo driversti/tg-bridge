@@ -33,7 +33,6 @@ from tg_bridge.format import (
 )
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
 from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
-from tg_bridge.source.models import GLOBAL_SCAN_CAP
 from tg_bridge.timerange import Period, describe_period, parse_period
 
 KINDS = ("user", "bot", "group", "supergroup", "channel")
@@ -323,24 +322,18 @@ async def search_messages(
             limit=limit + 1,  # the extra one only tells us whether more exist
             after=parsed.after if parsed else None,
         )
-        page = await source.search_messages(sq, resolved)
+        found = await source.search_messages(sq, resolved)
         chats = None if resolved is not None else {c.id: c for c in await source.list_dialogs()}
-    more = len(page.messages) > limit
-    shown = page.messages[:limit]
-    resume = None if more else page.resume  # the source stopped on its scan cap, not on `limit`
+    more = len(found) > limit
+    shown = found[:limit]
     scope = "chat" if resolved is not None else "global"
     period_text = "all time" if period.start is None and period.end is None else describe_period(period, tz)
     head = search_head(query, resolved, period_text, tz, from_me)
 
     def next_hint(boundary: Message) -> str:
-        after = resume if resume is not None and shown and boundary is shown[-1] else SearchOffset(
-            boundary.chat_id, boundary.id, boundary.date
-        )
+        after = SearchOffset(boundary.chat_id, boundary.id, boundary.date)
         return _search_call(query, resolved, after, scope, period, from_me)
 
-    if not shown and resume is not None:
-        note = f"Scanned {GLOBAL_SCAN_CAP} hits, none of them yours, more may remain."
-        return f"{head}\nNo hits yet. {note} Next: {_search_call(query, resolved, resume, scope, period, from_me)}"
     return render_hits(
         head,
         shown,
@@ -348,9 +341,8 @@ async def search_messages(
         query=query,
         tz=tz,
         max_chars=settings.max_chars,
-        more=more or resume is not None,
+        more=more,
         next_hint=next_hint,
-        scanned_note=f"Scanned {GLOBAL_SCAN_CAP} hits, more may remain." if resume is not None else None,
     )
 
 

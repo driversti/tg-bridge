@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person, SearchPage, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person, SearchQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
 
 log = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class LiveSource:
         await self._ensure_connected()
         return await self._telegram.get_messages(chat, query)
 
-    async def search_messages(self, query: SearchQuery, chat: Chat | None) -> SearchPage:
+    async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         await self._ensure_connected()
         return await self._telegram.search(query, chat)
 

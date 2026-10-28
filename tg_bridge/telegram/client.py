@@ -17,8 +17,7 @@ from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
-from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchOffset, SearchPage, SearchQuery, Topic
-from tg_bridge.source.models import GLOBAL_SCAN_CAP
+from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchOffset, SearchQuery, Topic
 from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import chat_from_dialog, message_from_tl, person_from_user, topic_from_forum_topic
 
@@ -170,29 +169,26 @@ class ReadOnlyTelegram:
         )
         return messages
 
-    async def search(self, query: SearchQuery, chat: Chat | None) -> SearchPage:
-        """Text hits newest first: one chat via messages.Search, or all dialogs via messages.SearchGlobal."""
+    async def search(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
+        """At most query.limit text hits, newest first: one chat via messages.Search, all dialogs via
+        messages.SearchGlobal, or the user's own messages in all dialogs via messages.Search on inputPeerEmpty."""
         client = self._connected()
         started = time.monotonic()
-        scanned = 0
         if chat is not None:
             entity = await self._input_entity(client, chat.id)
-            page, scanned = await self._call(lambda: self._search_chat(client, entity, chat, query))
+            found = await self._call(lambda: self._search_chat(client, entity, chat, query))
+            mode = f"chat {chat.id}"
+        elif query.from_me:
+            found = await self._call(lambda: self._search_pages(client, query, self._mine_request))
+            mode = "global, mine"
         else:
-            after = query.after
-            first_peer = tl.InputPeerEmpty() if after is None else await self._input_entity(client, after.chat_id)
-            page, scanned = await self._call(lambda: self._search_global(client, query, first_peer))
-        log.info(
-            "searched %s: %d hits, %d scanned in %.2f s",
-            f"chat {chat.id}" if chat else "global",
-            len(page.messages),
-            scanned,
-            time.monotonic() - started,
-        )
-        return page
+            found = await self._call(lambda: self._search_pages(client, query, self._global_request))
+            mode = "global"
+        log.info("searched %s: %d hits in %.2f s", mode, len(found), time.monotonic() - started)
+        return found
 
     @staticmethod
-    async def _search_chat(client: Any, entity: Any, chat: Chat, query: SearchQuery) -> tuple[SearchPage, int]:
+    async def _search_chat(client: Any, entity: Any, chat: Chat, query: SearchQuery) -> list[Message]:
         kwargs: dict[str, Any] = {
             "search": query.text,
             "limit": None,  # stopped by hand: start date and query.limit
@@ -202,13 +198,11 @@ class ReadOnlyTelegram:
         if query.from_me:
             kwargs["from_user"] = "me"
         found: list[Message] = []
-        scanned = 0
         if query.limit > 0:
             async for raw in client.iter_messages(entity, **kwargs):
                 msg = message_from_tl(raw, chat.id)
                 if msg is None:
                     continue
-                scanned += 1
                 if query.start is not None and msg.date < query.start:
                     break
                 if query.end is not None and msg.date >= query.end:
@@ -216,31 +210,53 @@ class ReadOnlyTelegram:
                 found.append(msg)
                 if len(found) >= query.limit:
                     break
-        return SearchPage(found, None), scanned
+        return found
 
-    async def _search_global(self, client: Any, query: SearchQuery, first_peer: Any) -> tuple[SearchPage, int]:
-        # Raw requests: iter_messages cannot resume a global search from a given hit, SearchGlobal needs
-        # offset_rate/offset_peer/offset_id for that. The boundary hit's date serves as offset_rate (smoke-tested).
+    async def _global_request(self, client: Any, query: SearchQuery, after: SearchOffset | None, limit: int) -> Any:
+        # The boundary hit's date serves as offset_rate, so a search resumes from any shown hit (smoke-tested).
+        return functions.messages.SearchGlobalRequest(
+            q=query.text,
+            filter=tl.InputMessagesFilterEmpty(),
+            min_date=query.start,
+            max_date=query.end,
+            offset_rate=int(after.date.timestamp()) if after else 0,
+            offset_peer=await self._input_entity(client, after.chat_id) if after else tl.InputPeerEmpty(),
+            offset_id=after.message_id if after else 0,
+            limit=limit,
+        )
+
+    @staticmethod
+    async def _mine_request(client: Any, query: SearchQuery, after: SearchOffset | None, limit: int) -> Any:
+        # SearchGlobal has no sender filter; messages.Search on inputPeerEmpty with from_id=self searches the user's
+        # own messages in every dialog, filtered by the server (smoke-tested: pages by offset_id + max_date).
+        return functions.messages.SearchRequest(
+            peer=tl.InputPeerEmpty(),
+            q=query.text,
+            filter=tl.InputMessagesFilterEmpty(),
+            min_date=query.start,
+            max_date=after.date if after else query.end,
+            offset_id=after.message_id if after else 0,
+            add_offset=0,
+            limit=limit,
+            max_id=0,
+            min_id=0,
+            hash=0,
+            from_id=tl.InputPeerSelf(),
+        )
+
+    async def _search_pages(
+        self,
+        client: Any,
+        query: SearchQuery,
+        request_for: Callable[[Any, SearchQuery, SearchOffset | None, int], Awaitable[Any]],
+    ) -> list[Message]:
+        """Raw requests: iter_messages cannot resume a global search from a given hit (nor run the inputPeerEmpty
+        search: its post-processing raises), so pages are fetched here, each resuming from the previous last hit."""
         after = query.after
-        offset_rate = int(after.date.timestamp()) if after else 0
-        offset_peer, offset_id = first_peer, after.message_id if after else 0
         found: list[Message] = []
-        scanned = 0
         while len(found) < query.limit:
-            # Own hits are filtered here, so a from_me scan always reads full pages (up to the scan cap).
-            want = 100 if query.from_me else min(100, query.limit - len(found))
-            result = await client(
-                functions.messages.SearchGlobalRequest(
-                    q=query.text,
-                    filter=tl.InputMessagesFilterEmpty(),
-                    min_date=query.start,
-                    max_date=query.end,
-                    offset_rate=offset_rate,
-                    offset_peer=offset_peer,
-                    offset_id=offset_id,
-                    limit=want,
-                )
-            )
+            want = min(100, query.limit - len(found))
+            result = await client(await request_for(client, query, after, want))
             entities = {utils.get_peer_id(e): e for e in itertools.chain(result.users, result.chats)}
             last: Message | None = None
             for raw in result.messages:
@@ -249,24 +265,19 @@ class ReadOnlyTelegram:
                 raw._finish_init(client, entities, None)  # same call as Telethon's _MessagesIter: resolves senders
                 msg = message_from_tl(raw, utils.get_peer_id(raw.peer_id))
                 if query.start is not None and msg.date < query.start:
-                    return SearchPage(found, None), scanned
+                    return found
                 last = msg
                 if query.end is not None and msg.date >= query.end:
                     continue
-                scanned += 1
-                if not query.from_me or msg.out:
-                    found.append(msg)
-                    if len(found) >= query.limit:
-                        return SearchPage(found, None), scanned
-                if query.from_me and scanned >= GLOBAL_SCAN_CAP:
-                    return SearchPage(found, SearchOffset(msg.chat_id, msg.id, msg.date)), scanned
+                found.append(msg)
+                if len(found) >= query.limit:
+                    return found
             # A non-slice answer is the end (asking again would repeat it), and so is an empty page. A short page is
             # not: Telegram drops hidden hits from a page (Telethon's iterator makes the same call).
             if last is None or isinstance(result, tl.messages.Messages):
                 break
-            offset_rate, offset_id = int(last.date.timestamp()), last.id
-            offset_peer = await self._input_entity(client, last.chat_id)
-        return SearchPage(found, None), scanned
+            after = SearchOffset(last.chat_id, last.id, last.date)
+        return found
 
     async def _input_entity(self, client: Any, chat_id: int) -> Any:
         try:

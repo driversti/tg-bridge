@@ -19,9 +19,9 @@ def hint(boundary):
     return f'call search_messages(query="адреса", cursor="h{boundary.id}")'
 
 
-def hits_out(hits, head="HEAD", chats=None, query="адреса", max_chars=12000, more=False, note=None):
+def hits_out(hits, head="HEAD", chats=None, query="адреса", max_chars=12000, more=False):
     return render_hits(
-        head, hits, chats=chats, query=query, tz=W, max_chars=max_chars, more=more, next_hint=hint, scanned_note=note
+        head, hits, chats=chats, query=query, tz=W, max_chars=max_chars, more=more, next_hint=hint
     )
 
 
@@ -95,7 +95,7 @@ def test_query_with_quotes_is_quoted_once():
     hits = [make_message(id=1, chat_id=123456, date=utc(25, 12), text="say hi")]
     out = render_hits(
         head, hits, chats=None, query=q, tz=W, max_chars=5000, more=True,
-        next_hint=lambda b: f"call search_messages(query={quote_query(q)})", scanned_note=None,
+        next_hint=lambda b: f"call search_messages(query={quote_query(q)})",
     )
     assert len(out.splitlines()) == 1 + 1 + 1 + 1  # head, hit, footer, context
     assert quote_query(q) in out
@@ -118,7 +118,7 @@ def test_single_huge_hit_is_cut():
 def test_longest_footer_fits_reserve():
     q = "ж" * 60
     lines = [
-        f"Shown 100 hits (2026-10-25 13:00 → 2026-10-22 14:00). Scanned 500 hits, more may remain. Next: call "
+        f"Shown 100 hits (2026-10-25 13:00 → 2026-10-22 14:00). Older hits remain. Next: call "
         f"search_messages(query={quote_query(q)}, chat=\"-1001234567890\", cursor=\"g4790_d1792000000_n1001234567890_s1792000000_e1792000000_m_q417\")",
         'Context: call get_messages(chat="<id>", around=<#id>).',
     ]

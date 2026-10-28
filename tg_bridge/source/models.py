@@ -119,12 +119,3 @@ class SearchQuery:
     limit: int  # the tool asks for limit + 1, as for get_messages
     after: SearchOffset | None
 
-
-@dataclass(frozen=True)
-class SearchPage:
-    messages: list[Message]  # newest first; Message.chat_id is the hit's chat
-    resume: SearchOffset | None  # set only when the source stopped on its scan cap before `limit`
-
-
-# Raw hits one global `from_me` search call may scan: SearchGlobal has no sender filter, so own hits are filtered here.
-GLOBAL_SCAN_CAP = 500

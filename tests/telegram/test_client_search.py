@@ -57,9 +57,9 @@ async def test_per_chat_stops_at_start_skips_end_and_stops_at_limit(wrapper):
     tg, fake = await connected(wrapper)
     fake.messages = [raw(9, 9), raw(8, 8), raw(7, 7), raw(6, 6), raw(5, 5), raw(4, 4)]
     page = await tg.search(q(start=T0 + timedelta(days=5), end=T0 + timedelta(days=9)), CHAT)
-    assert [m.id for m in page.messages] == [8, 7, 6, 5] and page.resume is None
+    assert [m.id for m in page] == [8, 7, 6, 5]
     page = await tg.search(q(limit=2), CHAT)
-    assert [m.id for m in page.messages] == [9, 8]
+    assert [m.id for m in page] == [9, 8]
 
 
 # --- global ---
@@ -91,8 +91,8 @@ async def test_global_pages_internally_and_maps_chat_ids(wrapper):
     second = [raw(101, 99, peer=10)]
     fake.result_queues["SearchGlobalRequest"] = [slice_(first), slice_(second)]
     page = await tg.search(q(limit=101), None)  # the tool asks for limit + 1, so 101 is the largest real ask
-    assert [m.id for m in page.messages] == list(range(1, 102))
-    assert [m.chat_id for m in page.messages][:3] == [-1000000000010, -1000000000011, -1000000000010]
+    assert [m.id for m in page] == list(range(1, 102))
+    assert [m.chat_id for m in page][:3] == [-1000000000010, -1000000000011, -1000000000010]
     assert len(fake.requests) == 2 and fake.requests[0].limit == 100
     r2 = fake.requests[1]  # advanced from the last raw message of page 1
     assert (r2.offset_id, r2.offset_rate, r2.limit) == (100, int(first[-1].date.timestamp()), 1)
@@ -105,39 +105,61 @@ async def test_global_short_page_is_not_the_end_empty_page_is(wrapper):
     tg, fake = await connected(wrapper)
     fake.result_queues["SearchGlobalRequest"] = [slice_([raw(3, 3)]), slice_([raw(2, 2)]), slice_([])]
     page = await tg.search(q(limit=5), None)
-    assert [m.id for m in page.messages] == [3, 2] and len(fake.requests) == 3
+    assert [m.id for m in page] == [3, 2] and len(fake.requests) == 3
 
 
 async def test_global_stops_on_non_slice(wrapper):
     tg, fake = await connected(wrapper)
     fake.result_queues["SearchGlobalRequest"] = [tl.messages.Messages(messages=[raw(i, i) for i in range(5, 0, -1)], chats=[], users=[], topics=[])]
     page = await tg.search(q(limit=10), None)
-    assert len(page.messages) == 5 and len(fake.requests) == 1  # not a slice: asking again would repeat it
+    assert len(page) == 5 and len(fake.requests) == 1  # not a slice: asking again would repeat it
 
 
 async def test_global_period_client_side(wrapper):
     tg, fake = await connected(wrapper)
     fake.result_queues["SearchGlobalRequest"] = [slice_([raw(9, 9), raw(8, 8), raw(7, 7), raw(6, 6)])]
     page = await tg.search(q(limit=4, start=T0 + timedelta(days=7), end=T0 + timedelta(days=9)), None)
-    assert [m.id for m in page.messages] == [8, 7]
+    assert [m.id for m in page] == [8, 7]
 
 
-async def test_global_from_me_filters_and_scan_cap_resumes(wrapper, monkeypatch):
+def mine(messages):
+    return tl.messages.Messages(messages=messages, chats=[], users=[tl_user(id=5)], topics=[])
+
+
+async def test_global_from_me_is_filtered_by_the_server(wrapper):
+    # SearchGlobal has no sender filter; messages.Search on inputPeerEmpty with from_id=self searches only the
+    # user's own messages across all dialogs (verified on the real account).
     tg, fake = await connected(wrapper)
-    monkeypatch.setattr(client_module, "GLOBAL_SCAN_CAP", 4)
-    msgs = [raw(i, 20 - i, out=(i == 2)) for i in range(1, 11)]
-    fake.result_queues["SearchGlobalRequest"] = [slice_(msgs[:5]), slice_(msgs[5:])]
-    page = await tg.search(q(from_me=True, limit=3), None)
-    assert [m.id for m in page.messages] == [2]
-    assert page.resume == SearchOffset(-1000000000010, 4, msgs[3].date.astimezone(UTC))
-    assert len(fake.requests) == 1
+    fake.result_queues["SearchRequest"] = [mine([raw(2, 2, out=True, peer=11), raw(1, 1, out=True)])]
+    start, end = T0, T0 + timedelta(days=30)
+    page = await tg.search(q(from_me=True, start=start, end=end), None)
+    assert [(m.chat_id, m.id) for m in page] == [(-1000000000011, 2), (-1000000000010, 1)]
+    assert [type(r).__name__ for r in fake.requests] == ["SearchRequest"]
+    r = fake.requests[0]
+    assert isinstance(r.peer, tl.InputPeerEmpty) and isinstance(r.from_id, tl.InputPeerSelf)
+    assert (r.q, r.min_date, r.max_date, r.offset_id, r.add_offset, r.limit) == ("адреса", start, end, 0, 0, 10)
 
 
-async def test_global_from_me_without_cap_reaches_limit(wrapper):
+async def test_global_from_me_resumes_from_boundary_hit(wrapper):
     tg, fake = await connected(wrapper)
-    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(i, 20 - i, out=True) for i in range(1, 4)])]
-    page = await tg.search(q(from_me=True, limit=2), None)
-    assert [m.id for m in page.messages] == [1, 2] and page.resume is None
+    fake.result_queues["SearchRequest"] = [mine([])]
+    boundary = T0 + timedelta(days=3)
+    await tg.search(q(from_me=True, end=T0 + timedelta(days=30), after=SearchOffset(-1000000000042, 77, boundary)), None)
+    r = fake.requests[0]
+    assert (r.offset_id, r.max_date) == (77, boundary)
+
+
+async def test_global_from_me_pages_internally_until_empty_or_non_slice(wrapper):
+    tg, fake = await connected(wrapper)
+    first = [raw(i, 200 - i, out=True) for i in range(1, 101)]
+    fake.result_queues["SearchRequest"] = [slice_(first), slice_([raw(101, 50, out=True)]), slice_([])]
+    page = await tg.search(q(from_me=True, limit=150), None)
+    assert [m.id for m in page] == list(range(1, 102))
+    assert [(r.offset_id, r.max_date) for r in fake.requests[1:]] == [(100, first[-1].date), (101, T0 + timedelta(days=50))]
+    fake.requests.clear()
+    fake.result_queues["SearchRequest"] = [mine([raw(1, 1, out=True)])]
+    await tg.search(q(from_me=True, limit=5), None)
+    assert len(fake.requests) == 1  # not a slice: everything came back at once
 
 
 async def test_flood_wait_inside_loop_is_rate_limited(wrapper):

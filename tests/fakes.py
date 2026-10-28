@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchOffset, SearchPage, SearchQuery
+from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchQuery
 
 
 def make_person(**overrides) -> Person:
@@ -77,7 +77,6 @@ class FakeSource:
         dialogs: list[Chat] | None = None,
         infos: dict[int, ChatInfo] | None = None,
         messages: dict[int, list[Message]] | None = None,
-        scan_cap: int | None = None,
     ):
         self.me = me or make_person()
         self.error = error
@@ -86,7 +85,6 @@ class FakeSource:
         self.infos = dict(infos or {})
         self.messages = {k: list(v) for k, v in (messages or {}).items()}
         self.message_queries: list[MessageQuery] = []
-        self.scan_cap = scan_cap
         self.search_queries: list[tuple[SearchQuery, int | None]] = []  # (query, searched chat id or None)
         self.list_dialogs_calls: list[bool] = []  # the `refresh` flag of each call
 
@@ -133,8 +131,8 @@ class FakeSource:
             found = [m for m in found if m.id < query.boundary_id]
         return found[::-1][: query.limit]
 
-    async def search_messages(self, query: SearchQuery, chat: Chat | None) -> SearchPage:
-        """Casefolded substring match, newest first by (date, chat_id, id); `scan_cap` mimics the live global cap."""
+    async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
+        """Casefolded substring match, newest first by (date, chat_id, id)."""
         self.search_queries.append((query, chat.id if chat else None))
         if self.error:
             raise self.error
@@ -149,18 +147,6 @@ class FakeSource:
         if query.after is not None:
             a = query.after
             found = [m for m in found if (m.date, m.chat_id, m.id) < (a.date, a.chat_id, a.message_id)]
-        if query.from_me and chat is not None:
+        if query.from_me:
             found = [m for m in found if m.out]
-            return SearchPage(messages=found[: query.limit], resume=None)
-        hits: list[Message] = []
-        scanned = 0
-        for i, m in enumerate(found):
-            if len(hits) >= query.limit:
-                break
-            if self.scan_cap is not None and query.from_me and scanned >= self.scan_cap:
-                last = found[i - 1]
-                return SearchPage(hits, SearchOffset(chat_id=last.chat_id, message_id=last.id, date=last.date))
-            scanned += 1
-            if not query.from_me or m.out:
-                hits.append(m)
-        return SearchPage(messages=hits, resume=None)
+        return found[: query.limit]

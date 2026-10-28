@@ -338,19 +338,18 @@ def render_hits(
     max_chars: int,
     more: bool,
     next_hint: Callable[[Message], str],
-    scanned_note: str | None = None,
 ) -> str:
     """Head + hit lines + footer, always <= max_chars. `hits` are newest first; `chats` given groups them by chat."""
     if not hits:
         return _clamp(f"{head}\n{EMPTY_SEARCH}", max_chars)
     total = len(hits)
     for count in range(total, 0, -1):
-        text = _hits_text(head, hits[:count], chats, query, tz, more or count < total, next_hint, scanned_note)
+        text = _hits_text(head, hits[:count], chats, query, tz, more or count < total, next_hint)
         if len(text) <= max_chars:
             return text
     text_limit = max(max_chars - len(head) - FOOTER_RESERVE, 0)
     while True:
-        text = _hits_text(head, hits[:1], chats, query, tz, True, next_hint, scanned_note, text_limit)
+        text = _hits_text(head, hits[:1], chats, query, tz, True, next_hint, text_limit)
         if len(text) <= max_chars or text_limit == 0:
             return _clamp(text, max_chars)
         text_limit = max(0, text_limit - max(1, len(text) - max_chars))
@@ -364,7 +363,6 @@ def _hits_text(
     tz: ZoneInfo,
     unfinished: bool,
     next_hint: Callable[[Message], str],
-    scanned_note: str | None,
     text_limit: int | None = None,
 ) -> str:
     def text_of(text: str, limit: int | None) -> str:
@@ -385,7 +383,7 @@ def _hits_text(
     noun = "hit" if len(shown) == 1 else "hits"
     span = f"{_when(shown[0].date, tz)} → {_when(shown[-1].date, tz)}"
     if unfinished:
-        tail = f"{scanned_note or 'Older hits remain.'} Next: {next_hint(shown[-1])}"
+        tail = f"Older hits remain. Next: {next_hint(shown[-1])}"
     else:
         tail = "No more hits."
     lines.append(f"Shown {len(shown)} {noun} ({span}). {tail}")

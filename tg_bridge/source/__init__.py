@@ -8,7 +8,6 @@ from tg_bridge.source.models import (
     MessageQuery,
     Person,
     SearchOffset,
-    SearchPage,
     SearchQuery,
     Topic,
 )
@@ -25,7 +24,6 @@ __all__ = [
     "MessageSource",
     "Person",
     "SearchOffset",
-    "SearchPage",
     "SearchQuery",
     "Topic",
 ]

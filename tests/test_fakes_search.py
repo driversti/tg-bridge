@@ -21,7 +21,7 @@ def q(text="адреса", **kw):
 
 
 def ids(page):
-    return [(m.chat_id, m.id) for m in page.messages]
+    return [(m.chat_id, m.id) for m in page]
 
 
 async def test_per_chat_matches_casefolded_substring_newest_first():
@@ -30,7 +30,6 @@ async def test_per_chat_matches_casefolded_substring_newest_first():
     assert ids(page) == [(A.id, 1)]
     page = await src.search_messages(q("адрес"), A)
     assert ids(page) == [(A.id, 3), (A.id, 1)]
-    assert page.resume is None
     assert src.search_queries[-1] == (q("адрес"), A.id)
 
 
@@ -65,12 +64,9 @@ async def test_period_and_from_me_filter():
     assert ids(page) == [(A.id, 4), (A.id, 3), (A.id, 1)]
 
 
-async def test_scan_cap_sets_resume_to_last_scanned():
-    msgs = [msg(A, i, i, out=(i == 9)) for i in range(1, 11)]  # newest first: 10, 9, 8, ...
-    src = FakeSource(dialogs=[A], messages={A.id: msgs}, scan_cap=3)
+async def test_global_from_me_keeps_only_own_messages():
+    msgs = [msg(A, i, i, out=(i in (3, 9))) for i in range(1, 11)]
+    src = FakeSource(dialogs=[A], messages={A.id: msgs})
     page = await src.search_messages(q(from_me=True, limit=5), None)
-    assert ids(page) == [(A.id, 9)]
-    assert page.resume == SearchOffset(chat_id=A.id, message_id=8, date=T0 + timedelta(days=8))
-    # per-chat from_me is server-side: no cap
-    page = await src.search_messages(q(from_me=True, limit=5), A)
-    assert ids(page) == [(A.id, 9)] and page.resume is None
+    assert ids(page) == [(A.id, 9), (A.id, 3)]
+
