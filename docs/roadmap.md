@@ -22,7 +22,7 @@ pre-plan future features here.
 | 01 | Chats: `list_chats`, `get_chat_info`, chat resolution | [features/01-chats.md](features/01-chats.md) · [plan](plans/01-chats.md) | 00 | [x] |
 | 02 | Reading: `get_messages` + periods, budget, pagination | [features/02-reading.md](features/02-reading.md) · [plan](plans/02-reading.md) | 01 | [x] |
 | 03 | Search: `search_messages` | [features/03-search.md](features/03-search.md) · [plan](plans/03-search.md) | 02 | [x] |
-| 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) | 02 | [ ] |
+| 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) · [plan](plans/04-export.md) | 02 | [~] |
 | 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) | 02 | [ ] |
 
