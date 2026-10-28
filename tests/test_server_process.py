@@ -39,7 +39,7 @@ async def test_stdio_lists_tools_without_telegram(tmp_path):
         tools = await client.list_tools()
         result = await client.call_tool("whoami", {})
 
-    assert sorted(t.name for t in tools.tools) == ["get_chat_info", "get_messages", "list_chats", "whoami"]
+    assert sorted(t.name for t in tools.tools) == ["get_chat_info", "get_messages", "list_chats", "search_messages", "whoami"]
     assert result.is_error is True
     assert "tg_bridge.login" in result.content[0].text
     assert not session.exists()

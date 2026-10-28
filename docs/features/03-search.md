@@ -6,10 +6,11 @@
 Find messages by text in one chat or across all chats. Scenario 1.
 
 ## Scope
-- `search_messages(query, chat?, days|since|until, cursor?, limit?)`: Telegram server-side search (per-chat, or global when `chat` is omitted).
+- `search_messages(query, chat?, days|since|until, from_me?, cursor?, limit?)`: Telegram server-side search (per-chat, or global when `chat` is omitted).
 - Results reuse the compact line format, prefixed with chat title, and always include a message link/id so the model can call `get_messages` around a hit.
 - Optional `from_me: bool` filter (useful for "when did I write X").
 - Global mode = the user's own dialogs only (`SearchGlobal`), never public discovery (design §11).
+- `get_messages(chat, around=<message id>)`: the messages just before and after a hit (default 20), the hit marked `▶`; `Older:`/`Newer:` cursors continue from there.
 - Document the limits of server-side search (word-based, no semantics) in the tool description so the model tries synonyms/variants itself.
 
 ## Done when
@@ -19,3 +20,7 @@ Find messages by text in one chat or across all chats. Scenario 1.
 ## Smoke checklist (manual, real account)
 - [ ] Per-chat and global search both return results.
 - [ ] Ukrainian/Russian/Polish text is found.
+- [ ] Paging: page 2 of a global search has no duplicates or gaps against page 1 (validates the `offset_rate` = date choice).
+- [ ] A hit inside an **archived** chat shows up in global search (if not: note it; `folder_id=1` would need a second request).
+- [ ] `get_messages(around=<hit id>)` from a search result shows the context with `▶` on the hit.
+- [ ] Global `from_me` finds an old message of yours.

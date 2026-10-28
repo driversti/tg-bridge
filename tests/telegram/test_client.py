@@ -17,6 +17,8 @@ from tests.telegram.test_mapping import forum_topic, tl_channel, tl_msg, tl_user
 class FakeTelethonClient:
     def __init__(self):
         self.args, self.kwargs = (), {}
+        self._self_id = 42  # read by Telethon's Message._finish_init, together with the entity cache
+        self._mb_entity_cache = SimpleNamespace(get=lambda *_: None)
         self.calls: list[str] = []
         self.authorized = True
         self.me = user(id=42, first_name="Anna", username="anna_k")
@@ -26,6 +28,7 @@ class FakeTelethonClient:
         self.iter_dialogs_error: Exception | None = None
         self.requests: list = []  # every request object passed to client(...)
         self.results: dict[str, object] = {}  # request type name -> canned result
+        self.result_queues: dict[str, list] = {}  # request type name -> results handed out one per call
         self.request_errors: dict[str, Exception] = {}
         self.input_entity_ids: list[int] = []
         self.unknown_entities = 0
@@ -81,6 +84,8 @@ class FakeTelethonClient:
         self.requests.append(request)
         if name in self.request_errors:
             raise self.request_errors[name]
+        if self.result_queues.get(name):
+            return self.result_queues[name].pop(0)
         return self.results[name]
 
     async def start(self, *args, **kwargs):  # must never be used by the server: it prompts on stdin
@@ -174,7 +179,7 @@ async def test_flood_wait_becomes_rate_limited(wrapper):
 def test_public_surface_is_read_only():
     public = {n for n in dir(ReadOnlyTelegram) if not n.startswith("_")}
 
-    assert public == {"connect", "get_me", "disconnect", "list_dialogs", "get_chat_details", "get_messages"}
+    assert public == {"connect", "get_me", "disconnect", "list_dialogs", "get_chat_details", "get_messages", "search"}
 
 
 async def test_unauthorized_client_is_dropped_so_next_connect_rereads_session(settings):

@@ -283,3 +283,18 @@ async def test_get_messages_connects_and_delegates():
 
     assert tg.connect_calls == 1
     assert tg.message_calls == [(chat, query)]
+
+
+async def test_search_messages_passes_through():
+    from tg_bridge.source import SearchPage, SearchQuery
+
+    class T(StubTelegram):
+        async def search(self, query, chat):
+            self.searched = (query, chat)
+            return SearchPage([], None)
+
+    tg = T()
+    source = LiveSource(tg)
+    query = SearchQuery("x", None, None, False, 5, None)
+    page = await source.search_messages(query, None)
+    assert page == SearchPage([], None) and tg.searched == (query, None)

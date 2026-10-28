@@ -4,19 +4,21 @@ Exposes read methods only. Never calls client.start() (it prompts on stdin, whic
 the MCP transport owns), never sends read receipts or status updates.
 """
 
+import itertools
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from telethon import TelegramClient
+from telethon import TelegramClient, utils
 from telethon.errors import FloodError, RPCError
 from telethon.tl import functions
 from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
-from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, Topic
+from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchOffset, SearchPage, SearchQuery, Topic
+from tg_bridge.source.models import GLOBAL_SCAN_CAP
 from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import chat_from_dialog, message_from_tl, person_from_user, topic_from_forum_topic
 
@@ -167,6 +169,103 @@ class ReadOnlyTelegram:
             "read %d messages from %d (%s) in %.2f s", len(messages), chat.id, query.direction, time.monotonic() - started
         )
         return messages
+
+    async def search(self, query: SearchQuery, chat: Chat | None) -> SearchPage:
+        """Text hits newest first: one chat via messages.Search, or all dialogs via messages.SearchGlobal."""
+        client = self._connected()
+        started = time.monotonic()
+        scanned = 0
+        if chat is not None:
+            entity = await self._input_entity(client, chat.id)
+            page, scanned = await self._call(lambda: self._search_chat(client, entity, chat, query))
+        else:
+            after = query.after
+            first_peer = tl.InputPeerEmpty() if after is None else await self._input_entity(client, after.chat_id)
+            page, scanned = await self._call(lambda: self._search_global(client, query, first_peer))
+        log.info(
+            "searched %s: %d hits, %d scanned in %.2f s",
+            f"chat {chat.id}" if chat else "global",
+            len(page.messages),
+            scanned,
+            time.monotonic() - started,
+        )
+        return page
+
+    @staticmethod
+    async def _search_chat(client: Any, entity: Any, chat: Chat, query: SearchQuery) -> tuple[SearchPage, int]:
+        kwargs: dict[str, Any] = {
+            "search": query.text,
+            "limit": None,  # stopped by hand: start date and query.limit
+            "offset_date": query.end,
+            "offset_id": query.after.message_id if query.after else 0,
+        }
+        if query.from_me:
+            kwargs["from_user"] = "me"
+        found: list[Message] = []
+        scanned = 0
+        if query.limit > 0:
+            async for raw in client.iter_messages(entity, **kwargs):
+                msg = message_from_tl(raw, chat.id)
+                if msg is None:
+                    continue
+                scanned += 1
+                if query.start is not None and msg.date < query.start:
+                    break
+                if query.end is not None and msg.date >= query.end:
+                    continue
+                found.append(msg)
+                if len(found) >= query.limit:
+                    break
+        return SearchPage(found, None), scanned
+
+    async def _search_global(self, client: Any, query: SearchQuery, first_peer: Any) -> tuple[SearchPage, int]:
+        # Raw requests: iter_messages cannot resume a global search from a given hit, SearchGlobal needs
+        # offset_rate/offset_peer/offset_id for that. The boundary hit's date serves as offset_rate (smoke-tested).
+        after = query.after
+        offset_rate = int(after.date.timestamp()) if after else 0
+        offset_peer, offset_id = first_peer, after.message_id if after else 0
+        found: list[Message] = []
+        scanned = 0
+        while len(found) < query.limit:
+            # Own hits are filtered here, so a from_me scan always reads full pages (up to the scan cap).
+            want = 100 if query.from_me else min(100, query.limit - len(found))
+            result = await client(
+                functions.messages.SearchGlobalRequest(
+                    q=query.text,
+                    filter=tl.InputMessagesFilterEmpty(),
+                    min_date=query.start,
+                    max_date=query.end,
+                    offset_rate=offset_rate,
+                    offset_peer=offset_peer,
+                    offset_id=offset_id,
+                    limit=want,
+                )
+            )
+            entities = {utils.get_peer_id(e): e for e in itertools.chain(result.users, result.chats)}
+            last: Message | None = None
+            for raw in result.messages:
+                if isinstance(raw, tl.MessageEmpty):
+                    continue
+                raw._finish_init(client, entities, None)  # same call as Telethon's _MessagesIter: resolves senders
+                msg = message_from_tl(raw, utils.get_peer_id(raw.peer_id))
+                if query.start is not None and msg.date < query.start:
+                    return SearchPage(found, None), scanned
+                last = msg
+                if query.end is not None and msg.date >= query.end:
+                    continue
+                scanned += 1
+                if not query.from_me or msg.out:
+                    found.append(msg)
+                    if len(found) >= query.limit:
+                        return SearchPage(found, None), scanned
+                if query.from_me and scanned >= GLOBAL_SCAN_CAP:
+                    return SearchPage(found, SearchOffset(msg.chat_id, msg.id, msg.date)), scanned
+            # A short page or a non-slice answer is the end; asking again would repeat the same hits.
+            if last is None or len(result.messages) < want or isinstance(result, tl.messages.Messages):
+                break
+            offset_rate, offset_id = int(last.date.timestamp()), last.id
+            offset_peer = await self._input_entity(client, last.chat_id)
+        return SearchPage(found, None), scanned
 
     async def _input_entity(self, client: Any, chat_id: int) -> Any:
         try:
