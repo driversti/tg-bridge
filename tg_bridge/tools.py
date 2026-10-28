@@ -1,8 +1,10 @@
 """MCP tool bodies: thin, plain-text, Telethon-free."""
 
-from collections.abc import Callable, Iterator
+import asyncio
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -16,6 +18,7 @@ from tg_bridge.cursor import (
     encode_search_cursor,
 )
 from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError, CursorError, TgBridgeError
+from tg_bridge.export import ExportResult, export_chat_file, period_text, when_text
 from tg_bridge.format import (
     MAX_CANDIDATES,
     ambiguous_text,
@@ -352,3 +355,57 @@ def _search_call(
     token = encode_search_cursor(SearchCursor(scope, after, period.start, period.end, from_me), query)  # type: ignore[arg-type]
     where = f', chat="{chat.id}"' if chat is not None else ""
     return f'call search_messages(query={quote_query(query)}{where}, cursor="{token}")'
+
+
+async def export_chat(
+    source: MessageSource,
+    settings: Settings,
+    chat: str,
+    *,
+    days: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    format: str = "md",
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> str:
+    if format.strip().casefold() != "md":
+        raise ToolError('Only format="md" is supported.')
+    resolved = await resolve_chat_arg(source, chat, settings)
+    tz = settings.timezone
+    moment = now()
+    with _tool_errors():
+        period = parse_period(days, since, until, tz, moment)  # no period = the whole history, unlike get_messages
+        info = await source.get_chat_info(resolved)
+    result = await export_chat_file(source, info, period, settings.export_dir, tz, moment, sleep=sleep)
+    who = f"{one_line(resolved.title)} ({resolved.id})"
+    if result.path is None and result.stopped is not None:
+        # Stopped before the first page: saying "no messages" would be wrong.
+        raise ToolError(f"Could not export: {one_line(result.stopped)}. No file written.")
+    if result.path is None:
+        text = f"No messages from {who} in this period ({period_text(period, tz)}); no file written."
+    else:
+        text = _export_text(result, who, resolved.id, period, tz)
+    return text if len(text) <= settings.max_chars else text[: settings.max_chars - 1] + "…"
+
+
+def _export_text(result: ExportResult, who: str, chat_id: int, period: Period, tz: ZoneInfo) -> str:
+    noun = "message" if result.count == 1 else "messages"
+    lines = [f"Exported {result.count} {noun} from {who} to:", str(result.path)]
+    first, last = result.first, result.last
+    if result.stopped is None:
+        lines.append(
+            f"Range: {when_text(first, tz)} → {when_text(last, tz)} ({tz.key}). "
+            "The file has the full text; it was not read into this conversation."
+        )
+        return "\n".join(lines)
+    # Resume one second after the last exported message (Telegram dates have second resolution).
+    resume = (last + timedelta(seconds=1)).astimezone(tz).strftime("%Y-%m-%dT%H:%M:%S")
+    call = f'export_chat(chat="{chat_id}", since="{resume}"'
+    if period.end is not None:
+        call += f', until="{period.end.astimezone(tz).strftime("%Y-%m-%dT%H:%M:%S")}"'
+    lines.append(
+        f"Stopped early: {one_line(result.stopped)}. The file ends at {when_text(last, tz)}. "
+        f"To get the rest later, call {call})."
+    )
+    return "\n".join(lines)
