@@ -14,7 +14,7 @@ def settings(tmp_path):
 async def test_lists_tools(settings):
     tools = await build_server(FakeSource(), settings).list_tools()
 
-    assert sorted(t.name for t in tools) == ["get_chat_info", "get_messages", "list_chats", "whoami"]
+    assert sorted(t.name for t in tools) == ["get_chat_info", "get_messages", "list_chats", "search_messages", "whoami"]
     assert all(t.annotations.read_only_hint is True for t in tools)
 
 
@@ -51,7 +51,7 @@ async def test_get_messages_tool_schema(settings):
     tools = {t.name: t for t in await build_server(FakeSource(), settings).list_tools()}
 
     props = tools["get_messages"].input_schema["properties"]
-    assert set(props) == {"chat", "days", "since", "until", "topic", "from_me", "cursor", "limit"}
+    assert set(props) == {"chat", "days", "since", "until", "topic", "from_me", "cursor", "around", "limit"}
     assert tools["get_messages"].input_schema["required"] == ["chat"]
 
 
@@ -65,3 +65,13 @@ async def test_call_get_messages(settings):
 
     assert result.is_error is False
     assert "#7 " in result.content[0].text and "hi there" in result.content[0].text
+
+
+async def test_search_messages_registered_read_only(settings):
+    tools = {t.name: t for t in await build_server(FakeSource(), settings).list_tools()}
+
+    t = tools["search_messages"]
+    assert t.annotations.read_only_hint is True
+    assert set(t.input_schema["properties"]) == {"query", "chat", "days", "since", "until", "from_me", "cursor", "limit"}
+    assert t.input_schema["required"] == ["query"]
+    assert "NOT meaning" in t.description and "around=<#id>" in t.description

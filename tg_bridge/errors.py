@@ -55,13 +55,19 @@ class PeriodError(TgBridgeError):
 class CursorError(TgBridgeError):
     """The paging cursor is garbled, from another version, or otherwise unusable."""
 
-    def __init__(self, other_chat: bool = False) -> None:
+    def __init__(self, other_chat: bool = False, other_query: bool = False, tool: str = "get_messages") -> None:
+        # Models mix up cursors between chats and queries; naming the mistake lets them fix it instead of starting over.
         if other_chat:
-            # Models mix up cursors between chats; naming the mistake lets them fix it instead of starting over.
             super().__init__(
-                "This cursor belongs to another chat. Use the cursor from this chat's last result, "
-                "or call get_messages again without cursor."
+                f"This cursor belongs to another chat. Use the cursor from this chat's last result, "
+                f"or call {tool} again without cursor."
+            )
+        elif other_query:
+            super().__init__(
+                f"This cursor belongs to another query. Use the cursor from this query's last result, "
+                f"or call {tool} again without cursor."
             )
         else:
-            super().__init__("Invalid cursor. Call get_messages again without cursor.")
+            super().__init__(f"Invalid cursor. Call {tool} again without cursor.")
         self.other_chat = other_chat
+        self.other_query = other_query

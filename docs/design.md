@@ -150,8 +150,8 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 |---|---|---|
 | `list_chats(query?, kind?, limit=30)` | Find/browse dialogs (incl. archived) | id, kind, title, @username, last message date, `deleted_peer` flag |
 | `get_chat_info(chat)` | Details of one chat | type, title, description, members count, peer identity, topics (forums) |
-| `get_messages(chat, period…, topic?, cursor?, limit?)` | Read a chat chronologically for a period | compact lines + `next_cursor` + `truncated` flag |
-| `search_messages(query, chat?, period…, cursor?, limit?)` | Server-side text search, in one chat or globally | compact lines with chat name + link |
+| `get_messages(chat, period…, topic?, around?, cursor?, limit?)` | Read a chat chronologically for a period | compact lines + `next_cursor` + `truncated` flag |
+| `search_messages(query, chat?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat or globally | compact lines with chat name + link |
 | `export_chat(chat, period…, format="md")` | Write a conversation to a Markdown file | file path, message count, date range |
 | `find_deleted_users()` | Dialogs whose peer account is deleted | chat id, last known identity, message count, first/last date |
 | `export_deleted_users(dir?)` | One Markdown file per deleted-user dialog | list of paths + counts |

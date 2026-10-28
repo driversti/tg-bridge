@@ -7,8 +7,15 @@ from datetime import UTC, datetime
 from mcp.server.mcpserver.exceptions import ToolError
 
 from tg_bridge.config import Settings
-from tg_bridge.cursor import Cursor, decode_cursor, encode_cursor
-from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError, TgBridgeError
+from tg_bridge.cursor import (
+    Cursor,
+    SearchCursor,
+    decode_cursor,
+    decode_search_cursor,
+    encode_cursor,
+    encode_search_cursor,
+)
+from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError, CursorError, TgBridgeError
 from tg_bridge.format import (
     MAX_CANDIDATES,
     ambiguous_text,
@@ -17,16 +24,24 @@ from tg_bridge.format import (
     messages_head,
     not_found_text,
     one_line,
+    quote_query,
+    render_around,
+    render_hits,
     render_lines,
     render_page,
+    search_head,
 )
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
-from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, Topic
+from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
+from tg_bridge.source.models import GLOBAL_SCAN_CAP
 from tg_bridge.timerange import Period, describe_period, parse_period
 
 KINDS = ("user", "bot", "group", "supergroup", "channel")
 MIN_LIMIT, MAX_LIMIT = 1, 200
 MIN_MESSAGES, MAX_MESSAGES = 1, 300
+MIN_HITS, MAX_HITS = 1, 100
+DEFAULT_MESSAGES, AROUND_LIMIT = 100, 20
+MAX_QUERY_CHARS = 256
 # A "not found" retries with fresh dialogs only when the cache is older than this (seconds).
 REFRESH_AFTER = 30.0
 
@@ -142,12 +157,19 @@ async def get_messages(
     topic: str | int | None = None,
     from_me: bool = False,
     cursor: str | None = None,
-    limit: int = 100,
+    around: int | None = None,
+    limit: int | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> str:
     resolved = await resolve_chat_arg(source, chat, settings)
+    has_cursor = cursor is not None and bool(cursor.strip())
+    around_mode = around is not None and not has_cursor  # a cursor continues a page; it wins over `around`
+    if limit is None:
+        limit = AROUND_LIMIT if around_mode else DEFAULT_MESSAGES
     limit = max(MIN_MESSAGES, min(MAX_MESSAGES, limit))
     tz = settings.timezone
+    if around_mode:
+        return await _messages_around(source, settings, resolved, around, limit)
     with _tool_errors():
         if cursor is not None and cursor.strip():
             c = decode_cursor(cursor, resolved.id)
@@ -195,6 +217,42 @@ async def get_messages(
     )
 
 
+async def _messages_around(source: MessageSource, settings: Settings, chat: Chat, target: int, limit: int) -> str:
+    tz = settings.timezone
+    before = (limit - 1) // 2
+    after = limit - 1 - before
+
+    def query(direction: str, boundary: int, count: int) -> MessageQuery:
+        return MessageQuery(direction, None, None, boundary, None, False, count)  # type: ignore[arg-type]
+
+    with _tool_errors():
+        # Backward: the target (when it exists) + `before` + one more to learn whether older messages remain.
+        back = await source.get_messages(chat, query("backward", target + 1, before + 2))
+        ahead = await source.get_messages(chat, query("forward", target, after + 1))
+    found = bool(back) and back[0].id == target
+    older = back[1:] if found else back
+    more_older = len(older) > before
+    more_newer = len(ahead) > after
+    messages = [*older[:before][::-1], *back[:1] * found, *ahead[:after]]
+    label = f"around #{target}" if found else f"around #{target} (not found; nearest shown)"
+
+    def hint(direction: str, boundary: Message) -> str:
+        token = encode_cursor(Cursor(chat.id, direction, boundary.id, None, None, None, False))  # type: ignore[arg-type]
+        return f'call get_messages(chat="{chat.id}", cursor="{token}")'
+
+    return render_around(
+        messages_head(chat, label, tz),
+        messages,
+        target,
+        tz=tz,
+        max_chars=settings.max_chars,
+        more_older=more_older,
+        more_newer=more_newer,
+        older_hint=lambda m: hint("backward", m),
+        newer_hint=lambda m: hint("forward", m),
+    )
+
+
 async def _resolve_topic(source: MessageSource, chat: Chat, topic: str | int | None) -> Topic | None:
     if topic is None or (isinstance(topic, str) and not topic.strip()):
         return None
@@ -220,3 +278,85 @@ async def _resolve_topic(source: MessageSource, chat: Chat, topic: str | int | N
 def _topic_list(topics: list[Topic]) -> str:
     shown = "; ".join(f"#{t.id} {one_line(t.title)}" for t in topics[:MAX_CANDIDATES])
     return shown + (f"; …and {len(topics) - MAX_CANDIDATES} more" if len(topics) > MAX_CANDIDATES else "")
+
+
+async def search_messages(
+    source: MessageSource,
+    settings: Settings,
+    query: str,
+    chat: str | None = None,
+    *,
+    days: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    from_me: bool = False,
+    cursor: str | None = None,
+    limit: int = 30,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> str:
+    query = query.strip()
+    if not query:
+        raise ToolError("query is empty: pass the words to search for.")
+    if len(query) > MAX_QUERY_CHARS:
+        raise ToolError(f"query is too long (max {MAX_QUERY_CHARS} chars).")
+    limit = max(MIN_HITS, min(MAX_HITS, limit))
+    tz = settings.timezone
+    with _tool_errors():
+        parsed = decode_search_cursor(cursor, query) if cursor is not None and cursor.strip() else None
+    if parsed is not None and parsed.scope == "global" and chat is not None and chat.strip():
+        raise ToolError("This cursor is from a search in all chats; call search_messages without chat.")
+    if parsed is not None and parsed.scope == "chat" and not (chat and chat.strip()):
+        chat = str(parsed.after.chat_id)  # models drop arguments; the cursor knows its chat
+    resolved = await resolve_chat_arg(source, chat, settings) if chat and chat.strip() else None
+    with _tool_errors():
+        if parsed is not None:
+            if resolved is not None and resolved.id != parsed.after.chat_id:
+                raise CursorError(other_chat=True, tool="search_messages")
+            period, from_me = Period(parsed.start, parsed.end), parsed.from_me
+        else:
+            period = parse_period(days, since, until, tz, now())
+        sq = SearchQuery(
+            text=query,
+            start=period.start,
+            end=period.end,
+            from_me=from_me,
+            limit=limit + 1,  # the extra one only tells us whether more exist
+            after=parsed.after if parsed else None,
+        )
+        page = await source.search_messages(sq, resolved)
+        chats = None if resolved is not None else {c.id: c for c in await source.list_dialogs()}
+    more = len(page.messages) > limit
+    shown = page.messages[:limit]
+    resume = None if more else page.resume  # the source stopped on its scan cap, not on `limit`
+    scope = "chat" if resolved is not None else "global"
+    period_text = "all time" if period.start is None and period.end is None else describe_period(period, tz)
+    head = search_head(query, resolved, period_text, tz, from_me)
+
+    def next_hint(boundary: Message) -> str:
+        after = resume if resume is not None and shown and boundary is shown[-1] else SearchOffset(
+            boundary.chat_id, boundary.id, boundary.date
+        )
+        return _search_call(query, resolved, after, scope, period, from_me)
+
+    if not shown and resume is not None:
+        note = f"Scanned {GLOBAL_SCAN_CAP} hits, none of them yours, more may remain."
+        return f"{head}\nNo hits yet. {note} Next: {_search_call(query, resolved, resume, scope, period, from_me)}"
+    return render_hits(
+        head,
+        shown,
+        chats=chats,
+        query=query,
+        tz=tz,
+        max_chars=settings.max_chars,
+        more=more or resume is not None,
+        next_hint=next_hint,
+        scanned_note=f"Scanned {GLOBAL_SCAN_CAP} hits, more may remain." if resume is not None else None,
+    )
+
+
+def _search_call(
+    query: str, chat: Chat | None, after: SearchOffset, scope: str, period: Period, from_me: bool
+) -> str:
+    token = encode_search_cursor(SearchCursor(scope, after, period.start, period.end, from_me), query)  # type: ignore[arg-type]
+    where = f', chat="{chat.id}"' if chat is not None else ""
+    return f'call search_messages(query={quote_query(query)}{where}, cursor="{token}")'

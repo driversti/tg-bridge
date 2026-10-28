@@ -62,7 +62,8 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         topic: str | int | None = None,
         from_me: bool = False,
         cursor: str | None = None,
-        limit: int = 100,
+        around: int | None = None,
+        limit: int | None = None,
     ) -> str:
         """Read one chat's messages in time order, as compact lines grouped by day.
         `chat`: numeric id, @username, or words from the title.
@@ -71,10 +72,36 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         `topic`: forum topic id or title words (see get_chat_info). `from_me`: only messages the user sent.
         If the result ends with "Next: call get_messages(...)", more messages exist: make exactly that call, copying
         chat and cursor character for character (other arguments come from the cursor). To read a whole period,
-        keep calling until the result ends with "End of period."."""
+        keep calling until the result ends with "End of period."
+        `around`: a message #id (e.g. from search_messages): shows the messages just before and after it;
+        period, topic and from_me are then ignored."""
         return await tools.get_messages(
             source, settings, chat, days=days, since=since, until=until, topic=topic, from_me=from_me,
-            cursor=cursor, limit=limit,
+            cursor=cursor, around=around, limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=False)
+    async def search_messages(
+        query: str,
+        chat: str | None = None,
+        days: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        from_me: bool = False,
+        cursor: str | None = None,
+        limit: int = 30,
+    ) -> str:
+        """Find messages containing words, in one chat (`chat`: id, @username or title words) or, without `chat`,
+        in all the user's chats. Newest hits first, each with its date and #id.
+        Telegram matches whole words and word starts, NOT meaning: if nothing useful comes back, search again with
+        other word forms, synonyms, and the other languages people use in that chat (e.g. Ukrainian, Russian,
+        Polish, English). One query per call; prefer 1–2 distinctive words.
+        Period: `days` OR `since`/`until`, as in get_messages. `from_me`: only messages the user sent.
+        To see the conversation around a hit: get_messages(chat=<chat id>, around=<#id>).
+        If the result ends with "Next: call search_messages(...)", copy that call exactly to get older hits."""
+        return await tools.search_messages(
+            source, settings, query, chat, days=days, since=since, until=until, from_me=from_me, cursor=cursor,
+            limit=limit,
         )
 
     return server
