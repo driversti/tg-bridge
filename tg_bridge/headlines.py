@@ -15,6 +15,12 @@ MAX_TOKENS = 60
 MIN_TOKENS = 5
 OVERLAP = 0.7
 REPOST_WINDOW = timedelta(hours=72)
+# Channels rewrite news in their own words, so bodies differ while headlines stay near-identical. Headlines share
+# event names ("Гран-прі США") across different news, hence the stricter overlap and the short time window
+# (smoke test 2026-10-28: real reposts 0.88–0.89 within 2 h, different news up to 0.80).
+HEADLINE_OVERLAP = 0.85
+HEADLINE_MIN_TOKENS = 4
+HEADLINE_WINDOW = timedelta(hours=6)
 
 _URL = re.compile(r"https?://\S+|t\.me/\S+")
 _NOISE = re.compile(r"https?://\S+|t\.me/\S+|#\w+|@\w+")
@@ -48,6 +54,12 @@ def repost_tokens(text: str) -> frozenset[str]:
     return frozenset(words[:MAX_TOKENS])
 
 
+def similar_headlines(a: frozenset[str], b: frozenset[str]) -> bool:
+    """Stricter than `similar`; a caller also keeps the posts within HEADLINE_WINDOW."""
+    smaller = min(len(a), len(b))
+    return smaller >= HEADLINE_MIN_TOKENS and len(a & b) / smaller >= HEADLINE_OVERLAP
+
+
 def similar(a: frozenset[str], b: frozenset[str]) -> bool:
     """Overlap coefficient, so a short repost of a long post still matches; tiny sets must be equal."""
     smaller = min(len(a), len(b))
@@ -68,17 +80,22 @@ class Repost:
 def group_reposts(messages: Sequence[Message]) -> list[Repost]:
     """Greedy chronological clustering. Same-chat posts never merge: templated posts ("FP1 results", "FP2 results")
     in one channel are different news. `messages` must be chronological."""
-    groups: list[tuple[frozenset[str], list[Message]]] = []  # first post's tokens, members
+    groups: list[tuple[frozenset[str], frozenset[str], list[Message]]] = []  # first post's tokens, headline tokens
     for msg in messages:
         tokens = repost_tokens(msg.text)
-        for first_tokens, members in groups:
+        head_tokens = repost_tokens(headline(msg.text) or "")
+        for first_tokens, first_head, members in groups:
+            gap = msg.date - members[0].date
             if (
-                msg.date - members[0].date <= REPOST_WINDOW
+                gap <= REPOST_WINDOW
                 and all(m.chat_id != msg.chat_id for m in members)
-                and similar(first_tokens, tokens)
+                and (
+                    similar(first_tokens, tokens)
+                    or (gap <= HEADLINE_WINDOW and similar_headlines(first_head, head_tokens))
+                )
             ):
                 members.append(msg)
                 break
         else:
-            groups.append((tokens, [msg]))
-    return [Repost(tuple(members)) for _, members in groups]
+            groups.append((tokens, head_tokens, [msg]))
+    return [Repost(tuple(members)) for _, _, members in groups]

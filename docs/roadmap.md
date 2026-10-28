@@ -26,7 +26,7 @@ pre-plan future features here.
 | 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) · [plan](plans/06-media.md) | 02 | [x] |
 | 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) · [plan](plans/07-folders.md) | 01 | [x] |
-| 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) · [plan](plans/08-folder-queries.md) | 07, 03 | [~] |
+| 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) · [plan](plans/08-folder-queries.md) | 07, 03 | [x] |
 | 09 | Time awareness: "Now" line in results, `now()`, `this_week`/`last_month`/… keywords | [features/09-time-awareness.md](features/09-time-awareness.md) · [plan](plans/09-time-awareness.md) | 02 | [x] |
 
 Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from LM Studio.
@@ -54,4 +54,7 @@ _(deviations from design, one line each)_
 - 04: message `#id`/`↩#id` are t.me links where the chat has them; `export_chat` is annotated not read-only (it writes a local file).
 - 06: `DownloadResult` also carries `file_count` (the paused text needs "n/total files"); an album with a single downloadable file is treated as a plain single download.
 - 07: `list_chats` gained `min_folders` (smoke: asked for chats in 2+ folders, the model started calling `get_chat_info` on all 888 chats instead of intersecting per-folder lists).
+- 08: channels rewrite news instead of forwarding it, so whole-text overlap missed every real repost (smoke: 0 of 104 merged). Repost grouping also matches headlines (overlap ≥ 0.85, ≥ 4 tokens, ≤ 6 h apart); F1 × 7 days: 2 merges, no false ones.
+- 08: F1 (4 channels) × 7 days = 179 posts → 102 headlines, 2 pages, 1.2–4.5 s per call; folder search 1.5 s. Telethon `wait_time=0` for reads/searches ≤ 3000 messages (it slept 1 s per history page).
+- 08: smoke follow-ups: for "last 7 days" the model picks calendar `last_week`, and it does not fill `Links: …/<id>` into post links.
 - 09: LM Studio does not pass the MCP server `instructions` to the model (smoke 2026-10-28: asked without tools, it answered "[current date]" and could not quote them), so the date reaches the model only via the `Now:` line and `now()`. Also beyond the brief: `last_year` keyword, `TG_BRIDGE_MAX_CHARS` ≥ 500.

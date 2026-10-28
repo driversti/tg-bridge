@@ -108,3 +108,47 @@ def test_group_output_ordered_by_first_post_and_empty():
     assert [g.first.id for g in group_reposts(posts)] == [1, 2]
     assert group_reposts([]) == []
     assert isinstance(group_reposts(posts)[0], Repost)
+
+
+# Real pairs from the feature 08 smoke test (folder F1, 2026-10-22…28): channels rewrite the news in their own words,
+# so the bodies differ and only the headlines are near-identical. Bodies here are stand-ins of the same shape.
+POLE_UF = "⬆️ Кімі Антонеллі забирає поул позицію на Гран-прі США\n\nДругим став Шарль Леклер, третім Макс Ферстаппен"
+POLE_DRS = "Кімі Антонеллі завойовує поул-позицію на Гран-прі США 🇺🇸🔥\n\nІталієць випередив суперників на дві десятих"
+WIN_UF = "⬆️ Кімі Антонеллі перемагає на гонці Гран-прі США\n\nUkrFormula | Inst | TikTok | Shop"
+WIN_DRS = (
+    "Кімі Антонеллі перемагає на Гран-прі США, а разом із ним на подіумі – Шарль Леклер та Макс Ферстаппен!\n\n"
+    "До чемпіонства йому лишається зовсім небагато"
+)
+FP3_RESULTS = "⬆️ Результати третьої практики Гран-прі США\n\nНайшвидшим був Гамільтон"
+QUALI_RESULTS = "🏁 РЕЗУЛЬТАТИ КВАЛІФІКАЦІЇ ГРАН-ПРІ США 🏁\n\n1. Антонеллі 2. Леклер 3. Ферстаппен"
+RACE_RESULTS = "🏁 РЕЗУЛЬТАТИ ГРАН-ПРІ США 🏁\n\n1. Антонеллі 2. Леклер 3. Ферстаппен"
+GRID_F1U = "Решітка Гран-прі Пендосії США 🦅\n\nПоул у Антонеллі"
+GRID_UF = "🔴 Стартова решітка, можливі стратегії та залишок гуми на гонку Гран-прі США\n\nДеталі на картинці"
+
+
+def groups_of(*posts):
+    return [[m.id for m in g.posts] for g in group_reposts(posts)]
+
+
+def test_group_rewritten_reposts_by_headline():
+    assert groups_of(msg(1, -1, POLE_UF, 0), msg(2, -2, POLE_DRS, 12)) == [[1, 2]]
+    assert groups_of(msg(1, -1, WIN_UF, 0), msg(2, -2, WIN_DRS, 120)) == [[1, 2]]
+
+
+def test_group_headline_match_needs_posts_close_in_time():
+    assert groups_of(msg(1, -1, POLE_UF, 0), msg(2, -2, POLE_DRS, 7 * 60)) == [[1], [2]]
+
+
+def test_group_headlines_sharing_only_the_event_name_stay_apart():
+    # Overlaps 0.75–0.80 in the smoke data: same Grand Prix, different news.
+    assert groups_of(msg(1, -1, FP3_RESULTS, 0), msg(2, -2, QUALI_RESULTS, 210)) == [[1], [2]]
+    assert groups_of(msg(1, -1, GRID_F1U, 0), msg(2, -2, GRID_UF, 200)) == [[1], [2]]
+    assert groups_of(msg(1, -1, RACE_RESULTS, 0), msg(2, -2, WIN_UF, 5)) == [[1], [2]]
+
+
+def test_group_short_headlines_do_not_match_by_headline():
+    # Fewer than 4 tokens in a headline: too little to tell news apart.
+    assert groups_of(msg(1, -1, "Берман всьо\n\nзійшов з траси", 0), msg(2, -2, "Берман всьо\n\nкінець гонки", 5)) == [
+        [1],
+        [2],
+    ]
