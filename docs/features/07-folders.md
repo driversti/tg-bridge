@@ -31,10 +31,10 @@ The model knows the user's chat folders and can work "per folder": list them, li
 - From LM Studio: "list my folders" and "show chats in folder WAR" work.
 
 ## Smoke checklist (manual, real account)
-- [ ] `list_folders` returns the same folders, in the same order, as the app's sidebar.
-- [ ] Chat count of an explicit folder matches the app.
-- [ ] A chat that sits in two folders lists both in `get_chat_info`.
-- [ ] The rule-based "Unread" folder lists the currently unread chats, and its count shrinks within 5 min (dialog cache TTL) after reading one in the app.
-- [ ] "Which chats are in two or more folders?" → the model calls `list_chats(min_folders=2)` (not one call per chat), and the folders shown match the app.
-- [ ] A shared folder (if any) is listed with `kind=shared`.
-- [ ] A chat muted only through the global notification defaults is left out of an `exclude_muted` folder, as in the app.
+- [x] `list_folders` returns the same folders, in the same order, as the app's sidebar.
+- [x] Chat count of an explicit folder matches the app.
+- [x] A chat that sits in two folders lists both in `get_chat_info`.
+- [x] The rule-based "Unread" folder lists the currently unread chats, and its count shrinks within 5 min (dialog cache TTL) after reading one in the app.
+- [x] "Which chats are in two or more folders?" → the model calls `list_chats(min_folders=2)` (not one call per chat), and the folders shown match the app.
+- [-] A shared folder (if any) is listed with `kind=shared`. _(N/A 2026-10-28: no shared folders on the account)_
+- [-] A chat muted only through the global notification defaults is left out of an `exclude_muted` folder, as in the app. _(N/A 2026-10-28: no `exclude_muted` folder on the account)_
