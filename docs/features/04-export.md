@@ -19,3 +19,5 @@ Write a conversation (or period of it) to a readable Markdown file, so the user 
 ## Smoke checklist (manual, real account)
 - [ ] The exported file opens nicely in Obsidian or an editor.
 - [ ] A large chat exports without the model's context growing.
+- [ ] Export of the largest chat finishes within LM Studio's tool timeout (note the duration and message count in the Log).
+- [ ] A forum/supergroup export has working t.me links.

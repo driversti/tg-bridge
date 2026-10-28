@@ -271,13 +271,13 @@ def _media_text(media: MediaInfo) -> str:
     if kind in ("audio", "document"):
         details.append(one_line(media.file_name or ""))
     if kind in ("video", "voice", "video_note") and media.duration is not None:
-        details.append(_duration(media.duration))
+        details.append(duration_text(media.duration))
     if kind in ("photo", "video", "audio", "document") and media.size is not None:
-        details.append(_size(media.size))
+        details.append(size_text(media.size))
     return f"[{' '.join(d for d in details if d)}]"
 
 
-def _size(size: int) -> str:
+def size_text(size: int) -> str:
     if size < 1024:
         return f"{size}B"
     if size < 1024 * 1024:
@@ -285,7 +285,7 @@ def _size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f}MB"
 
 
-def _duration(seconds: int) -> str:
+def duration_text(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
