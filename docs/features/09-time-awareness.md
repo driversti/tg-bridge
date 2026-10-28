@@ -21,6 +21,6 @@ The local model often doesn't know today's date (it guesses from its training cu
 - The "Now" line is present in every tool's output (one test over all registered tools).
 
 ## Smoke checklist (manual, real account)
-- [ ] In a fresh LM Studio chat, "what's the date today?" is answered correctly after one tool call.
-- [ ] "News in folder F1 this week" uses `this_week` (or `now()` + correct dates), not a stale year.
-- [ ] "Who signed for next year?" treats next year as 2027 (as of 2026).
+- [x] In a fresh LM Studio chat, "what's the date today?" is answered correctly after one tool call.
+- [x] "News in folder F1 this week" (checked on a single chat: folders come in 07/08) uses `this_week` (or `now()` + correct dates), not a stale year.
+- [x] "Who signed for next year?" treats next year as 2027 (as of 2026).

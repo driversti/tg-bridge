@@ -27,7 +27,7 @@ pre-plan future features here.
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) · [plan](plans/06-media.md) | 02 | [x] |
 | 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) | 01 | [ ] |
 | 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) | 07, 03 | [ ] |
-| 09 | Time awareness: "Now" line in results, `now()`, `this_week`/`last_month`/… keywords | [features/09-time-awareness.md](features/09-time-awareness.md) · [plan](plans/09-time-awareness.md) | 02 | [~] |
+| 09 | Time awareness: "Now" line in results, `now()`, `this_week`/`last_month`/… keywords | [features/09-time-awareness.md](features/09-time-awareness.md) · [plan](plans/09-time-awareness.md) | 02 | [x] |
 
 Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from LM Studio.
 
@@ -53,3 +53,4 @@ _(deviations from design, one line each)_
 - 04: LM Studio ends a tool call after ~60 s, so one `export_chat` call pauses after 40 s and the model continues with `resume=true`; the state sits in a hidden note at the end of the file (a ~55-char cursor got garbled on the 5th call). Smoke: 48 835 messages in 12 calls, ~14 min, one file.
 - 04: message `#id`/`↩#id` are t.me links where the chat has them; `export_chat` is annotated not read-only (it writes a local file).
 - 06: `DownloadResult` also carries `file_count` (the paused text needs "n/total files"); an album with a single downloadable file is treated as a plain single download.
+- 09: LM Studio does not pass the MCP server `instructions` to the model (smoke 2026-10-28: asked without tools, it answered "[current date]" and could not quote them), so the date reaches the model only via the `Now:` line and `now()`. Also beyond the brief: `last_year` keyword, `TG_BRIDGE_MAX_CHARS` ≥ 500.
