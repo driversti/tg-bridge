@@ -25,6 +25,9 @@ pre-plan future features here.
 | 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) · [plan](plans/04-export.md) | 02 | [x] |
 | 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) · [plan](plans/06-media.md) | 02 | [~] |
+| 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) | 01 | [ ] |
+| 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) | 07, 03 | [ ] |
+| 09 | Time awareness: "Now" line in results, `now()`, `this_week`/`last_month`/… keywords | [features/09-time-awareness.md](features/09-time-awareness.md) | 02 | [ ] |
 
 Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from LM Studio.
 
@@ -36,7 +39,7 @@ Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from L
 - [ ] 13 Semantic search (Ollama embeddings, sqlite-vec)
 - [ ] 14 Telegram bot interface
 - [ ] 15 Channel/group discovery
-- [ ] ? Map-reduce `summarize` tool (only if paging proves too weak)
+- [ ] ? Summarisation of large volumes, only via **MCP sampling** (the client's model does the work); the bridge itself never calls an LLM (decided 2026-10-28). Only if 08's headlines mode proves too weak.
 
 ## Log
 
