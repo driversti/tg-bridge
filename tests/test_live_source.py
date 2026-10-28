@@ -35,6 +35,14 @@ class StubTelegram:
         self.message_calls.append((chat, query))
         return []
 
+    async def get_media_files(self, chat, message_id):
+        self.message_calls.append(("media_files", chat, message_id))
+        return []
+
+    async def read_media(self, chat, message_id, offset):
+        self.message_calls.append(("read_media", chat, message_id, offset))
+        yield b"ab"
+
     async def connect(self):
         self.connect_calls += 1
         await asyncio.sleep(0)
@@ -298,3 +306,16 @@ async def test_search_messages_passes_through():
     query = SearchQuery("x", None, None, False, 5, None)
     page = await source.search_messages(query, None)
     assert page == [] and tg.searched == (query, None)
+
+
+async def test_media_methods_connect_and_delegate():
+    tg = StubTelegram()
+    source = LiveSource(tg)
+    chat = make_chat()
+
+    assert await source.get_media_files(chat, 7) == []
+    chunks = [c async for c in source.read_media(chat, 7, 1024)]
+
+    assert chunks == [b"ab"]
+    assert tg.connect_calls == 1
+    assert tg.message_calls == [("media_files", chat, 7), ("read_media", chat, 7, 1024)]

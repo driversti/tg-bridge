@@ -18,10 +18,19 @@ from tg_bridge.cursor import (
     encode_cursor,
     encode_search_cursor,
 )
-from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError, CursorError, TgBridgeError
+from tg_bridge.errors import (
+    AmbiguousChatError,
+    ChatNotFoundError,
+    CursorError,
+    MediaError,
+    MessageNotFoundError,
+    NotLoggedInError,
+    TgBridgeError,
+)
 from tg_bridge.export import ExportResult, export_chat_file, period_text, when_text
 from tg_bridge.format import (
     MAX_CANDIDATES,
+    SEP,
     ambiguous_text,
     chat_info_block,
     chat_line,
@@ -34,7 +43,9 @@ from tg_bridge.format import (
     render_lines,
     render_page,
     search_head,
+    size_text,
 )
+from tg_bridge.media import DownloadResult, SavedFile, download_message_media
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
 from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
 from tg_bridge.timerange import Period, describe_period, parse_period
@@ -413,3 +424,65 @@ def _export_text(result: ExportResult, who: str, chat_id: int, period: Period, t
     else:
         lines.append(f"Range: {span}. The file has the full text; it was not read into this conversation.")
     return "\n".join(lines)
+
+
+async def download_media(
+    source: MessageSource,
+    settings: Settings,
+    chat: str,
+    message_id: int,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> str:
+    resolved = await resolve_chat_arg(source, chat, settings)
+    call = f'download_media(chat="{resolved.id}", message_id={message_id})'
+    try:
+        result = await download_message_media(
+            source, resolved, message_id, settings.download_dir, settings.max_download_bytes, clock=clock
+        )
+    except (MediaError, MessageNotFoundError, NotLoggedInError) as e:
+        raise ToolError(str(e)) from e
+    except TgBridgeError as e:
+        # The .part file stays, so the same call carries on from it.
+        raise ToolError(f"{e}. Progress is kept: call {call} again to continue.") from e
+    except OSError as e:
+        # strerror only: str(e) would carry the path.
+        raise ToolError(f"Could not write the file: {e.strerror}.") from e
+    who = f"{one_line(resolved.title)} ({resolved.id})"
+    text = _download_text(result, who, message_id, call)
+    return text if len(text) <= settings.max_chars else text[: settings.max_chars - 1] + "…"
+
+
+def _download_text(result: DownloadResult, who: str, message_id: int, call: str) -> str:
+    if result.paused:
+        so_far = size_text(result.done_bytes)
+        of_total = "" if result.total_bytes is None else f" of {size_text(result.total_bytes)}"
+        count = f" ({len(result.saved)}/{result.file_count} files)" if result.album else ""
+        # Spelled out, as for export_chat: models stop early when a footer only hints at more.
+        return (
+            f"Downloaded {so_far}{of_total} so far from {who} #{message_id}{count}. "
+            f"Not finished: one call has a time limit. Next: call {call}"
+        )
+    if result.album:
+        total = sum(s.path.stat().st_size for s in result.saved)
+        lines = [
+            f"Downloaded album of {len(result.saved)} files ({size_text(total)}) from {who} #{message_id} to folder:",
+            str(result.folder),
+            *(_album_line(s) for s in result.saved),
+        ]
+    else:
+        saved = result.saved[0]
+        head = f"{saved.file.media.kind} ({_size_and_mime(saved)}) from {who} #{message_id}"
+        lines = [f"Already downloaded: {head}:" if saved.existed else f"Downloaded {head} to:", str(saved.path)]
+    lines.append("The file was not read into this conversation.")
+    return "\n".join(lines)
+
+
+def _size_and_mime(saved: SavedFile) -> str:
+    return f"{size_text(saved.path.stat().st_size)}, {saved.file.media.mime_type or 'unknown type'}"
+
+
+def _album_line(saved: SavedFile) -> str:
+    size = size_text(saved.path.stat().st_size)
+    line = f"{saved.path}{SEP}{size}{SEP}{saved.file.media.mime_type or 'unknown type'}"
+    return line + " (already there)" if saved.existed else line

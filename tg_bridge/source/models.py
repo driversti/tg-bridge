@@ -73,6 +73,20 @@ class MediaInfo:
     label: str | None  # sticker emoji, poll question
 
 
+# Telegram's upload.GetFile page size; offsets must be multiples of it.
+MEDIA_CHUNK = 512 * 1024
+
+
+@dataclass(frozen=True)
+class MediaFile:
+    """A message's downloadable file, as `download_media` needs it."""
+
+    message_id: int
+    album_id: int | None  # Telegram grouped_id
+    media: MediaInfo
+    extension: str  # ".jpg", ".pdf", "" when unknown
+
+
 @dataclass(frozen=True)
 class Message:
     id: int

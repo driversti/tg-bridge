@@ -19,6 +19,7 @@ DEFAULTS = {
     "TG_BRIDGE_MAX_CHARS": "12000",
     "TG_BRIDGE_EXPORT_DIR": "~/tg-bridge-data/exports",
     "TG_BRIDGE_DOWNLOAD_DIR": "~/tg-bridge-data/downloads",
+    "TG_BRIDGE_MAX_DOWNLOAD_MB": "200",
 }
 
 
@@ -36,6 +37,7 @@ class Settings:
     max_chars: int
     export_dir: Path
     download_dir: Path
+    max_download_bytes: int
 
 
 def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None = None) -> Settings:
@@ -68,6 +70,10 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
     if not (max_chars_raw.isascii() and max_chars_raw.isdigit()) or int(max_chars_raw) <= 0:
         raise ConfigError("TG_BRIDGE_MAX_CHARS must be a positive integer")
 
+    max_mb_raw = values["TG_BRIDGE_MAX_DOWNLOAD_MB"].strip()
+    if not (max_mb_raw.isascii() and max_mb_raw.isdigit()) or int(max_mb_raw) <= 0:
+        raise ConfigError("TG_BRIDGE_MAX_DOWNLOAD_MB must be a positive integer")
+
     return Settings(
         api_id=int(api_id_raw),
         api_hash=required("TG_API_HASH"),
@@ -76,6 +82,7 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
         max_chars=int(max_chars_raw),
         export_dir=_path(values["TG_BRIDGE_EXPORT_DIR"]),
         download_dir=_path(values["TG_BRIDGE_DOWNLOAD_DIR"]),
+        max_download_bytes=int(max_mb_raw) * 1024 * 1024,
     )
 
 

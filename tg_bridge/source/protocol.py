@@ -1,8 +1,9 @@
 """The interface tools depend on; stage 1 has LiveSource, stage 2 adds ArchiveSource."""
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, MediaFile, Message, MessageQuery, Person, SearchQuery
 
 
 class MessageSource(Protocol):
@@ -29,4 +30,13 @@ class MessageSource(Protocol):
     async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         """At most `query.limit` text hits, newest first (Message.chat_id is the hit's chat); `chat=None` searches all
         the user's dialogs."""
+        ...
+
+    async def get_media_files(self, chat: Chat, message_id: int) -> list[MediaFile]:
+        """The message's media as one file, or every file of its album ordered by id; [] when it has no media.
+        Raises MessageNotFoundError for an unknown id."""
+        ...
+
+    def read_media(self, chat: Chat, message_id: int, offset: int) -> AsyncIterator[bytes]:
+        """That message's file content from byte `offset` to the end, in chunks."""
         ...

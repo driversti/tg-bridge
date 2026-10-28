@@ -363,3 +363,51 @@ def test_service_actions():
 
 def test_message_empty_is_none():
     assert message_from_tl(tl.MessageEmpty(id=1, peer_id=tl.PeerChannel(10)), 1) is None
+
+
+# --- media files ---------------------------------------------------------------
+
+from tg_bridge.telegram.mapping import media_file_from_tl  # noqa: E402
+
+
+def tl_photo_media(sizes):
+    return tl.MessageMediaPhoto(
+        photo=tl.Photo(id=1, access_hash=1, file_reference=b"", date=SENT, sizes=sizes, dc_id=2)
+    )
+
+
+def test_media_file_from_photo_has_jpg_extension_and_album_id():
+    sizes = [tl.PhotoSize(type="x", w=2, h=2, size=5000)]
+
+    found = media_file_from_tl(tl_msg(id=7, media=tl_photo_media(sizes), grouped_id=99))
+
+    assert (found.message_id, found.album_id, found.extension, found.media.kind) == (7, 99, ".jpg", "photo")
+
+
+def test_media_file_photo_size_is_largest_real_size():
+    sizes = [
+        tl.PhotoSize(type="s", w=1, h=1, size=1000),
+        tl.PhotoSizeProgressive(type="y", w=3, h=3, sizes=[5000, 90000]),
+        tl.PhotoStrippedSize(type="i", bytes=b"\x01\x02"),
+    ]
+
+    found = media_file_from_tl(tl_msg(media=tl_photo_media(sizes)))
+
+    assert found.media.size == 90000
+
+
+def test_media_file_voice_is_ogg_and_sticker_tgs():
+    voice = tl_doc(tl.DocumentAttributeAudio(duration=12, voice=True), mime="audio/ogg")
+    sticker = tl_doc(
+        tl.DocumentAttributeSticker(alt="x", stickerset=tl.InputStickerSetEmpty()), mime="application/x-tgsticker"
+    )
+    pdf = tl_doc(tl.DocumentAttributeFilename("a.pdf"), mime="application/pdf")
+
+    assert media_file_from_tl(tl_msg(media=voice)).extension == ".ogg"
+    assert media_file_from_tl(tl_msg(media=sticker)).extension == ".tgs"
+    assert media_file_from_tl(tl_msg(media=pdf)).extension == ".pdf"
+
+
+def test_media_file_none_for_webpage_and_text():
+    assert media_file_from_tl(tl_msg()) is None
+    assert media_file_from_tl(tl_msg(media=tl.MessageMediaWebPage(webpage=tl.WebPageEmpty(id=1)))) is None

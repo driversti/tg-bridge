@@ -85,6 +85,24 @@ def test_non_positive_max_chars_raises(tmp_path, value):
         load_settings(env={**CREDS, "TG_BRIDGE_MAX_CHARS": value}, config_file=tmp_path / "c.env")
 
 
+def test_max_download_mb_default_is_200_mib(tmp_path):
+    settings = load_settings(env=CREDS, config_file=tmp_path / "c.env")
+
+    assert settings.max_download_bytes == 200 * 1024 * 1024
+
+
+def test_max_download_mb_is_configurable(tmp_path):
+    settings = load_settings(env={**CREDS, "TG_BRIDGE_MAX_DOWNLOAD_MB": "5"}, config_file=tmp_path / "c.env")
+
+    assert settings.max_download_bytes == 5 * 1024 * 1024
+
+
+@pytest.mark.parametrize("value", ["0", "abc", "-5"])
+def test_max_download_mb_must_be_positive_integer(tmp_path, value):
+    with pytest.raises(ConfigError, match="TG_BRIDGE_MAX_DOWNLOAD_MB"):
+        load_settings(env={**CREDS, "TG_BRIDGE_MAX_DOWNLOAD_MB": value}, config_file=tmp_path / "c.env")
+
+
 def test_repr_masks_hash(tmp_path):
     settings = load_settings(env=CREDS, config_file=tmp_path / "c.env")
 

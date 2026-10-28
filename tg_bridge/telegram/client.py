@@ -7,7 +7,7 @@ the MCP transport owns), never sends read receipts or status updates.
 import itertools
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from telethon import TelegramClient, utils
@@ -16,16 +16,36 @@ from telethon.tl import functions
 from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
-from tg_bridge.errors import NotLoggedInError, RateLimitedError
-from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchOffset, SearchQuery, Topic
+from tg_bridge.errors import MessageNotFoundError, NotLoggedInError, RateLimitedError
+from tg_bridge.source import (
+    MEDIA_CHUNK,
+    Chat,
+    ChatInfo,
+    MediaFile,
+    Message,
+    MessageQuery,
+    Person,
+    SearchOffset,
+    SearchQuery,
+    Topic,
+)
 from tg_bridge.telegram.identity import client_identity
-from tg_bridge.telegram.mapping import chat_from_dialog, message_from_tl, person_from_user, topic_from_forum_topic
+from tg_bridge.telegram.mapping import (
+    chat_from_dialog,
+    largest_photo_size,
+    media_file_from_tl,
+    message_from_tl,
+    person_from_user,
+    topic_from_forum_topic,
+)
 
 log = logging.getLogger(__name__)
 
 TOPICS_LIMIT = 100
 # Every forum has it. Unlike other topics it is no reply thread: its messages carry no topic header.
 GENERAL_TOPIC_ID = 1
+# Albums hold at most 10 items with consecutive ids, so the neighbours of any member fit in this window.
+ALBUM_REACH = 9
 # Telethon sleeps through FloodWaits up to this long itself; longer ones surface as RateLimitedError.
 FLOOD_SLEEP_THRESHOLD = 30
 
@@ -37,6 +57,8 @@ class ReadOnlyTelegram:
         self._settings = settings
         self._client_factory = client_factory
         self._client: Any = None
+        # Raw messages of the last get_media_files call, so read_media needs no second fetch.
+        self._media_raw: dict[tuple[int, int], Any] = {}
 
     async def connect(self) -> None:
         session = self._settings.session_path
@@ -279,6 +301,51 @@ class ReadOnlyTelegram:
             after = SearchOffset(last.chat_id, last.id, last.date)
         return found
 
+    async def get_media_files(self, chat: Chat, message_id: int) -> list[MediaFile]:
+        """The message's file, or every file of its album ordered by id; [] when it has no media."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        raw = await self._fetch_message(client, entity, message_id)
+        if raw is None:
+            raise MessageNotFoundError(message_id)
+        raws = [raw]
+        if getattr(raw, "grouped_id", None) is not None:
+            window = list(range(max(1, message_id - ALBUM_REACH), message_id + ALBUM_REACH + 1))
+            fetched = await self._call(lambda: client.get_messages(entity, ids=window))
+            raws = [m for m in fetched if _is_message(m) and m.grouped_id == raw.grouped_id]
+        files = [(m, media_file_from_tl(m)) for m in sorted(raws, key=lambda m: m.id)]
+        found = [(m, f) for m, f in files if f is not None]
+        self._media_raw = {(chat.id, m.id): m for m, _ in found}
+        log.info("media files=%d chat=%s", len(found), chat.id)
+        return [f for _, f in found]
+
+    async def read_media(self, chat: Chat, message_id: int, offset: int) -> AsyncIterator[bytes]:
+        """The file's bytes from `offset` (a multiple of MEDIA_CHUNK) to the end, one Telegram page at a time."""
+        client = self._connected()
+        raw = self._media_raw.get((chat.id, message_id))
+        if raw is None:
+            entity = await self._input_entity(client, chat.id)
+            raw = await self._fetch_message(client, entity, message_id)
+            if raw is None:
+                raise MessageNotFoundError(message_id)
+        file, size, dc_id = _download_target(raw)
+        try:
+            async for chunk in client.iter_download(
+                file, offset=offset, file_size=size, request_size=MEDIA_CHUNK, dc_id=dc_id
+            ):
+                yield bytes(chunk)  # Telethon's generic iterator yields memoryviews
+        except FloodError as e:
+            seconds = int(getattr(e, "seconds", 0) or 0)
+            log.warning("telegram flood wait: %d s", seconds)
+            raise RateLimitedError(seconds) from e
+
+    async def _fetch_message(self, client: Any, entity: Any, message_id: int) -> Any | None:
+        # Passing the entity matters: in private chats and basic groups ids are account-wide, and Telethon then
+        # returns None for an id that belongs to another chat.
+        found = await self._call(lambda: client.get_messages(entity, ids=[message_id]))
+        raw = found[0] if found else None
+        return raw if _is_message(raw) else None
+
     async def _input_entity(self, client: Any, chat_id: int) -> Any:
         try:
             return await self._call(lambda: client.get_input_entity(chat_id))
@@ -327,3 +394,22 @@ class ReadOnlyTelegram:
 def _in_general(raw: Any, msg: Message) -> bool:
     # A topic's creation message is its thread root and has no topic header, yet belongs to that topic.
     return msg.topic_id is None and not isinstance(getattr(raw, "action", None), tl.MessageActionTopicCreate)
+
+
+def _is_message(raw: Any) -> bool:
+    return raw is not None and not isinstance(raw, tl.MessageEmpty)
+
+
+def _download_target(raw: Any) -> tuple[Any, int | None, int | None]:
+    """(what to pass to iter_download, its exact byte size, dc_id) for a message with a photo or document."""
+    media = raw.media
+    if isinstance(media, tl.MessageMediaPhoto) and isinstance(media.photo, tl.Photo):
+        photo = media.photo
+        largest = largest_photo_size(photo)
+        if largest is None:
+            raise MessageNotFoundError(raw.id)
+        location = tl.InputPhotoFileLocation(
+            id=photo.id, access_hash=photo.access_hash, file_reference=photo.file_reference, thumb_size=largest[0]
+        )
+        return location, largest[1], photo.dc_id
+    return media.document, media.document.size, None

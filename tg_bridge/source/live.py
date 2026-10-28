@@ -3,10 +3,10 @@
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, MediaFile, Message, MessageQuery, Person, SearchQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
 
 log = logging.getLogger(__name__)
@@ -89,6 +89,15 @@ class LiveSource:
     async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         await self._ensure_connected()
         return await self._telegram.search(query, chat)
+
+    async def get_media_files(self, chat: Chat, message_id: int) -> list[MediaFile]:
+        await self._ensure_connected()
+        return await self._telegram.get_media_files(chat, message_id)
+
+    async def read_media(self, chat: Chat, message_id: int, offset: int) -> AsyncIterator[bytes]:
+        await self._ensure_connected()
+        async for chunk in self._telegram.read_media(chat, message_id, offset):
+            yield chunk
 
     async def close(self) -> None:
         async with self._lock:

@@ -127,6 +127,15 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
             source, settings, chat, days=days, since=since, until=until, format=format, resume=resume
         )
 
+    @server.tool(annotations=WRITES_LOCAL_FILE, structured_output=False)
+    async def download_media(chat: str, message_id: int) -> str:
+        """Save one message's photo, video, voice, document… to a local file and return only its path, size and
+        type, NOT its content. Only when the user asks for the file. `chat`: id, @username or title words.
+        `message_id`: the #id from get_messages or search_messages. A message in an album downloads the whole album.
+        One call works for about 40 seconds: if the result says "Next: call download_media(...)", make exactly that
+        call until it no longer says so."""
+        return await tools.download_media(source, settings, chat, message_id)
+
     return server
 
 

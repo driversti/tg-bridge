@@ -1,8 +1,10 @@
 """Test doubles shared across test modules."""
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from tg_bridge.source import Chat, ChatInfo, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.errors import MessageNotFoundError
+from tg_bridge.source import Chat, ChatInfo, MediaFile, MediaInfo, Message, MessageQuery, Person, SearchQuery
 
 
 def make_person(**overrides) -> Person:
@@ -67,6 +69,15 @@ def make_message(**overrides) -> Message:
     return Message(**fields)
 
 
+def make_media_file(message_id: int = 4812, *, kind="photo", name=None, size=None, mime="image/jpeg", ext=".jpg", album_id=None):
+    return MediaFile(
+        message_id=message_id,
+        album_id=album_id,
+        media=MediaInfo(kind, name, size, mime, None, None),
+        extension=ext,
+    )
+
+
 class FakeSource:
     """In-memory MessageSource."""
 
@@ -77,6 +88,8 @@ class FakeSource:
         dialogs: list[Chat] | None = None,
         infos: dict[int, ChatInfo] | None = None,
         messages: dict[int, list[Message]] | None = None,
+        media: dict[tuple[int, int], tuple[MediaFile, bytes]] | None = None,
+        chunk: int = 4,
     ):
         self.me = me or make_person()
         self.error = error
@@ -87,6 +100,9 @@ class FakeSource:
         self.message_queries: list[MessageQuery] = []
         self.search_queries: list[tuple[SearchQuery, int | None]] = []  # (query, searched chat id or None)
         self.list_dialogs_calls: list[bool] = []  # the `refresh` flag of each call
+        self.media = dict(media or {})  # (chat id, message id) -> (file, content)
+        self.chunk = chunk
+        self.read_offsets: list[tuple[int, int]] = []  # (message_id, offset) per read_media call
 
     async def whoami(self) -> Person:
         if self.error:
@@ -150,3 +166,25 @@ class FakeSource:
         if query.from_me:
             found = [m for m in found if m.out]
         return found[: query.limit]
+
+    async def get_media_files(self, chat: Chat, message_id: int) -> list[MediaFile]:
+        if self.error:
+            raise self.error
+        entry = self.media.get((chat.id, message_id))
+        if entry is None:
+            if any(m.id == message_id for m in self.messages.get(chat.id, [])):
+                return []
+            raise MessageNotFoundError(message_id)
+        album_id = entry[0].album_id
+        if album_id is None:
+            return [entry[0]]
+        siblings = [f for (cid, _), (f, _) in self.media.items() if cid == chat.id and f.album_id == album_id]
+        return sorted(siblings, key=lambda f: f.message_id)
+
+    async def read_media(self, chat: Chat, message_id: int, offset: int) -> AsyncIterator[bytes]:
+        self.read_offsets.append((message_id, offset))
+        if self.error:
+            raise self.error
+        data = self.media[(chat.id, message_id)][1][offset:]
+        for i in range(0, len(data), self.chunk):
+            yield data[i : i + self.chunk]

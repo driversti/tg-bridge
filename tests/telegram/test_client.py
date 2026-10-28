@@ -35,6 +35,11 @@ class FakeTelethonClient:
         self.messages: list = []  # tl messages iter_messages yields, in the order given
         self.iter_messages_calls: list[tuple] = []  # (entity, kwargs)
         self.iter_messages_fail_after: tuple[int, Exception] | None = None
+        self.messages_by_id: dict[int, object] = {}  # raw messages get_messages(ids=...) can find
+        self.get_messages_calls: list[tuple] = []  # (entity, ids)
+        self.download_chunks: list = []
+        self.download_fail_after: tuple[int, Exception] | None = None
+        self.iter_download_calls: list[tuple] = []  # (file, offset, file_size, dc_id, request_size)
 
     def __getattr__(self, name):  # only reached for attributes the fake does not define
         if name == "send_read_acknowledge":
@@ -70,6 +75,17 @@ class FakeTelethonClient:
             if self.iter_messages_fail_after and i == self.iter_messages_fail_after[0]:
                 raise self.iter_messages_fail_after[1]
             yield m
+
+    async def get_messages(self, entity, ids):
+        self.get_messages_calls.append((entity, ids))
+        return [self.messages_by_id.get(i) for i in ids]
+
+    async def iter_download(self, file, *, offset=0, file_size=None, dc_id=None, request_size=None, **kw):
+        self.iter_download_calls.append((file, offset, file_size, dc_id, request_size))
+        for i, chunk in enumerate(self.download_chunks):
+            if self.download_fail_after and i == self.download_fail_after[0]:
+                raise self.download_fail_after[1]
+            yield chunk
 
     async def get_input_entity(self, peer):
         self.input_entity_ids.append(peer)
@@ -179,7 +195,10 @@ async def test_flood_wait_becomes_rate_limited(wrapper):
 def test_public_surface_is_read_only():
     public = {n for n in dir(ReadOnlyTelegram) if not n.startswith("_")}
 
-    assert public == {"connect", "get_me", "disconnect", "list_dialogs", "get_chat_details", "get_messages", "search"}
+    assert public == {
+        "connect", "get_me", "disconnect", "list_dialogs", "get_chat_details", "get_messages", "search",
+        "get_media_files", "read_media",
+    }
 
 
 async def test_unauthorized_client_is_dropped_so_next_connect_rereads_session(settings):
@@ -212,6 +231,7 @@ async def test_client_identifies_as_tg_bridge(wrapper):
 
 ALLOWED_REQUESTS = {
     "GetFullUserRequest", "GetFullChatRequest", "GetFullChannelRequest", "GetForumTopicsRequest", "GetForumTopicsByIDRequest",
+    "GetMessagesRequest", "GetFileRequest",  # download_media: messages.GetMessages / channels.GetMessages, upload.GetFile
 }
 
 

@@ -75,3 +75,13 @@ class CursorError(TgBridgeError):
 
 class ExportFileError(TgBridgeError):
     """An export cursor points at a file that is gone or already finished."""
+
+
+class MessageNotFoundError(TgBridgeError):
+    def __init__(self, message_id: int):
+        super().__init__(f"Message #{message_id} not found in this chat.")
+        self.message_id = message_id
+
+
+class MediaError(TgBridgeError):
+    """A download_media request that cannot be served; the message tells the model why."""

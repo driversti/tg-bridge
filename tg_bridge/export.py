@@ -58,8 +58,13 @@ def period_text(period: Period, tz: ZoneInfo) -> str:
     return f"{when_text(period.start, tz)} → {when_text(period.end, tz) if period.end else 'now'}"
 
 
+def chat_slug(title: str) -> str:
+    """Folder/file-name form of a chat title; has no underscores, so `_<chat id>` after it is unambiguous."""
+    return normalize(title).replace(" ", "-")[:SLUG_CHARS].strip("-") or "chat"
+
+
 def export_filename(chat: Chat, period: Period, first: datetime, tz: ZoneInfo, now: datetime, n: int = 1) -> str:
-    slug = normalize(chat.title).replace(" ", "-")[:SLUG_CHARS].strip("-") or "chat"
+    slug = chat_slug(chat.title)
     start = (period.start or first).astimezone(tz).date()
     # `end` is exclusive: the day it falls on is only included when it is not exactly midnight.
     stop = ((period.end - timedelta(microseconds=1)) if period.end else now).astimezone(tz).date()

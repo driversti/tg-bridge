@@ -14,9 +14,9 @@ def settings(tmp_path):
 async def test_lists_tools(settings):
     tools = await build_server(FakeSource(), settings).list_tools()
 
-    assert sorted(t.name for t in tools) == ["export_chat", "get_chat_info", "get_messages", "list_chats", "search_messages", "whoami"]
-    # export_chat writes a local file; every other tool changes nothing at all.
-    assert all(t.annotations.read_only_hint is (t.name != "export_chat") for t in tools)
+    assert sorted(t.name for t in tools) == ["download_media", "export_chat", "get_chat_info", "get_messages", "list_chats", "search_messages", "whoami"]
+    # export_chat and download_media write local files; every other tool changes nothing at all.
+    assert all(t.annotations.read_only_hint is (t.name not in ("export_chat", "download_media")) for t in tools)
 
 
 async def test_call_whoami_returns_plain_text(settings):
@@ -87,3 +87,14 @@ async def test_export_chat_registered_as_local_file_writer(settings):
     assert set(t.input_schema["properties"]) == {"chat", "days", "since", "until", "format", "resume"}
     assert t.input_schema["required"] == ["chat"]
     assert "NOT the messages" in t.description
+
+
+async def test_download_media_registered_as_local_file_writer(settings):
+    tools = {t.name: t for t in await build_server(FakeSource(), settings).list_tools()}
+
+    t = tools["download_media"]
+    a = t.annotations
+    assert (a.read_only_hint, a.destructive_hint, a.idempotent_hint, a.open_world_hint) == (False, False, False, False)
+    assert set(t.input_schema["properties"]) == {"chat", "message_id"}
+    assert sorted(t.input_schema["required"]) == ["chat", "message_id"]
+    assert "NOT its content" in t.description and "Next: call download_media(" in t.description

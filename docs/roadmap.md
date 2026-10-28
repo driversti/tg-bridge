@@ -49,3 +49,4 @@ _(deviations from design, one line each)_
 - 03: global `from_me` uses `messages.Search` on `inputPeerEmpty` with `from_id=self` (server-side) instead of the plan's client-side filter with a 500-hit scan cap, which covered only ~10 days for channel-heavy words. In the smoke test it missed 1 of 21 own hits (a 2021 supergroup message, cause unknown).
 - 04: LM Studio ends a tool call after ~60 s, so one `export_chat` call pauses after 40 s and the model continues with `resume=true`; the state sits in a hidden note at the end of the file (a ~55-char cursor got garbled on the 5th call). Smoke: 48 835 messages in 12 calls, ~14 min, one file.
 - 04: message `#id`/`↩#id` are t.me links where the chat has them; `export_chat` is annotated not read-only (it writes a local file).
+- 06: `DownloadResult` also carries `file_count` (the paused text needs "n/total files"); an album with a single downloadable file is treated as a plain single download.

@@ -1,11 +1,13 @@
 """Telethon objects → domain models."""
 
+import dataclasses
 import re
 from datetime import UTC, datetime
 
+from telethon import utils
 from telethon.tl import types as tl
 
-from tg_bridge.source import Chat, ChatKind, MediaInfo, MediaKind, Message, Person, Topic
+from tg_bridge.source import Chat, ChatKind, MediaFile, MediaInfo, MediaKind, Message, Person, Topic
 
 
 def person_from_user(user) -> Person:
@@ -154,6 +156,44 @@ def _media(msg) -> MediaInfo | None:
     # Video durations arrive as floats (layer's `double`); the model holds whole seconds.
     duration = None if file.duration is None else round(file.duration)
     return MediaInfo(kind, file.name, file.size, file.mime_type, duration, label)
+
+
+# Python's mimetypes has no entry (or the odd ".oga") for these.
+_EXTENSION_BY_MIME = {"audio/ogg": ".ogg", "application/x-tgsticker": ".tgs"}
+
+
+def largest_photo_size(photo) -> tuple[str, int] | None:
+    """(size type, bytes) of the biggest size that can really be downloaded; never the stripped/cached thumbnails
+    (Telethon's own pick, `sizes[-1]`, can be the stripped one: a 1 KB blur)."""
+    best: tuple[str, int] | None = None
+    for size in photo.sizes:
+        if isinstance(size, tl.PhotoSize):
+            nbytes = size.size
+        elif isinstance(size, tl.PhotoSizeProgressive):
+            nbytes = max(size.sizes)
+        else:
+            continue
+        if best is None or nbytes > best[1]:
+            best = (size.type, nbytes)
+    return best
+
+
+def media_file_from_tl(msg) -> MediaFile | None:
+    """None when the message has no media (web-page previews included)."""
+    if isinstance(msg, (tl.MessageEmpty, tl.MessageService)):
+        return None
+    info = _media(msg)
+    if info is None:
+        return None
+    if info.kind == "photo":
+        # msg.file.size is an estimate; the limit and the short-stream check need what is really fetched.
+        largest = largest_photo_size(msg.media.photo)
+        if largest is not None:
+            info = dataclasses.replace(info, size=largest[1])
+        extension = ".jpg"
+    else:
+        extension = _EXTENSION_BY_MIME.get(info.mime_type or "") or utils.get_extension(msg.media)
+    return MediaFile(message_id=msg.id, album_id=msg.grouped_id, media=info, extension=extension)
 
 
 def _action(msg) -> str:
