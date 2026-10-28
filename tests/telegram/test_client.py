@@ -529,6 +529,17 @@ async def test_forward_query_kwargs(wrapper):
     assert second["offset_id"] == 50
 
 
+async def test_no_page_sleeps_up_to_telethons_own_threshold(wrapper):
+    # With limit=None Telethon sleeps 1 s between history pages; a folder read would spend its time sleeping.
+    await read(wrapper, [], query(limit=3000))
+    await read(wrapper, [], query(limit=1))
+    await read(wrapper, [], query(limit=3001))
+
+    small, tiny, big = (kw for _, kw in wrapper[1].iter_messages_calls)
+    assert small["wait_time"] == 0 and tiny["wait_time"] == 0
+    assert "wait_time" not in big
+
+
 async def test_backward_query_kwargs(wrapper):
     await read(wrapper, [], query(direction="backward", end=aware(25)))
     await read(wrapper, [], query(direction="backward", end=aware(25), boundary_id=50))

@@ -53,6 +53,15 @@ async def test_per_chat_passes_search_arguments(wrapper):
     assert "from_user" not in fake.iter_messages_calls[1][1] and fake.iter_messages_calls[1][1]["offset_id"] == 0
 
 
+async def test_per_chat_search_does_not_sleep_between_pages(wrapper):
+    tg, fake = await connected(wrapper)
+    await tg.search(q(limit=3000), CHAT)
+    await tg.search(q(limit=3001), CHAT)
+    small, big = (kw for _, kw in fake.iter_messages_calls)
+    assert small["wait_time"] == 0
+    assert "wait_time" not in big
+
+
 async def test_per_chat_stops_at_start_skips_end_and_stops_at_limit(wrapper):
     tg, fake = await connected(wrapper)
     fake.messages = [raw(9, 9), raw(8, 8), raw(7, 7), raw(6, 6), raw(5, 5), raw(4, 4)]

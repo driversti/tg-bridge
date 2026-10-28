@@ -73,11 +73,18 @@ class PeriodError(TgBridgeError):
 class CursorError(TgBridgeError):
     """The paging cursor is garbled, from another version, or otherwise unusable."""
 
-    def __init__(self, other_chat: bool = False, other_query: bool = False, tool: str = "get_messages") -> None:
+    def __init__(
+        self, other_chat: bool = False, other_query: bool = False, tool: str = "get_messages", other_folder: bool = False
+    ) -> None:
         # Models mix up cursors between chats and queries; naming the mistake lets them fix it instead of starting over.
         if other_chat:
             super().__init__(
                 f"This cursor belongs to another chat. Use the cursor from this chat's last result, "
+                f"or call {tool} again without cursor."
+            )
+        elif other_folder:
+            super().__init__(
+                f"This cursor belongs to another folder. Use the cursor from this folder's last result, "
                 f"or call {tool} again without cursor."
             )
         elif other_query:
@@ -89,6 +96,15 @@ class CursorError(TgBridgeError):
             super().__init__(f"Invalid cursor. Call {tool} again without cursor.")
         self.other_chat = other_chat
         self.other_query = other_query
+        self.other_folder = other_folder
+
+
+class TooManyMessagesError(TgBridgeError):
+    """A multi-chat read found more messages than one call may hold; the message tells the model to narrow the period."""
+
+
+class ReadTimeoutError(TgBridgeError):
+    """A multi-chat read ran out of time before every chat was read."""
 
 
 class ExportFileError(TgBridgeError):

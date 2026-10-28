@@ -128,3 +128,11 @@ def test_longest_footer_fits_reserve():
 def test_empty_hint_suggests_variants():
     out = hits_out([], head="HEAD")
     assert out.startswith("HEAD\nNo hits.") and "word forms" in out and "Next" not in out
+
+
+def test_head_folder():
+    from tests.fakes import make_folder
+
+    folder = make_folder(id=5, title="F1", emoticon="🏎")
+    head = search_head("x", None, "last 7 days", W, False, folder=folder, folder_size=18)
+    assert head == 'Search "x" in folder "F1 🏎" (18 chats) · last 7 days (Europe/Warsaw)'

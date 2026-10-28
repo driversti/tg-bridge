@@ -12,11 +12,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 from tg_bridge.config import Settings
 from tg_bridge.cursor import (
     Cursor,
+    ReadCursor,
     SearchCursor,
     decode_cursor,
+    decode_read_cursor,
     decode_search_cursor,
     encode_cursor,
+    encode_read_cursor,
     encode_search_cursor,
+    is_read_cursor,
 )
 from tg_bridge.errors import (
     AmbiguousChatError,
@@ -52,12 +56,18 @@ from tg_bridge.format import (
     size_text,
 )
 from tg_bridge.folders import chat_folders, folder_chats, resolve_folder
+from tg_bridge.format_many import Item, chat_labels, render_many
+from tg_bridge.headlines import group_reposts, headline
+from tg_bridge.many import read_chats, search_chats
 from tg_bridge.media import DownloadResult, SavedFile, download_message_media, safe_mime
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
 from tg_bridge.source import Chat, Folder, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
 from tg_bridge.timerange import Period, describe_period, now_details, parse_period
 
 KINDS = ("user", "bot", "group", "supergroup", "channel")
+MODES = ("full", "headlines")
+# Every page of a folder read costs one request stream per chat, so a rule-based "Unread" folder is refused.
+MAX_FOLDER_CHATS = 50
 MIN_LIMIT, MAX_LIMIT = 1, 200
 MIN_MESSAGES, MAX_MESSAGES = 1, 300
 MIN_HITS, MAX_HITS = 1, 100
@@ -227,8 +237,10 @@ async def get_chat_info(source: MessageSource, settings: Settings, chat: str) ->
 async def get_messages(
     source: MessageSource,
     settings: Settings,
-    chat: str,
+    chat: str | None = None,
     *,
+    folder: str | int | None = None,
+    mode: str = "full",
     days: int | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -239,7 +251,34 @@ async def get_messages(
     around: int | None = None,
     limit: int | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    clock: Callable[[], float] = time.monotonic,
 ) -> str:
+    chat = (chat or "").strip() or None
+    folder = (str(folder).strip() if folder is not None else "") or None
+    headlines = _headlines_mode(mode)
+    has_cursor = cursor is not None and bool(cursor.strip())
+    if has_cursor and is_read_cursor(cursor):
+        return await _read_many(
+            source, settings, chat=chat, folder=folder, headlines=headlines, days=days, since=since, until=until,
+            period=period, from_me=from_me, cursor=cursor, limit=limit, now=now, clock=clock,
+        )
+    if has_cursor:
+        if folder is not None:
+            raise CursorError()  # plain cursors belong to one chat
+    elif chat is not None and folder is not None:
+        raise ToolError("Pass either chat or folder, not both.")
+    elif folder is not None and (topic is not None or around is not None):
+        raise ToolError("topic and around work with one chat, not with a folder.")
+    if chat is None and folder is None:
+        raise ToolError("Pass chat or folder.")
+    wants_around = around is not None and not has_cursor
+    if folder is not None or (headlines and not wants_around and not has_cursor):
+        if headlines and topic is not None and folder is None:
+            raise ToolError('mode="headlines" does not work with topic.')
+        return await _read_many(
+            source, settings, chat=chat, folder=folder, headlines=headlines, days=days, since=since, until=until,
+            period=period, from_me=from_me, cursor=None, limit=limit, now=now, clock=clock,
+        )
     resolved = await resolve_chat_arg(source, chat, settings)
     has_cursor = cursor is not None and bool(cursor.strip())
     around_mode = around is not None and not has_cursor  # a cursor continues a page; it wins over `around`
@@ -294,6 +333,165 @@ async def get_messages(
         end_text="End of period." if forward else "No older messages.",
         empty_text="No messages in this period." if forward else "No messages.",
     )
+
+
+def _headlines_mode(mode: str) -> bool:
+    wanted = (mode or "").strip().casefold() or "full"
+    if wanted not in MODES:
+        raise ToolError(f'Unknown mode "{mode.strip()}". Allowed: {", ".join(MODES)}.')
+    return wanted == "headlines"
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def _read_key(msg: Message) -> tuple[int, int, int]:
+    return (int(msg.date.timestamp()), msg.chat_id, msg.id)  # whole seconds: that is all a cursor keeps
+
+
+async def _read_many(
+    source: MessageSource,
+    settings: Settings,
+    *,
+    chat: str | None,
+    folder: str | None,
+    headlines: bool,
+    days: int | None,
+    since: str | None,
+    until: str | None,
+    period: str | None,
+    from_me: bool,
+    cursor: str | None,
+    limit: int | None,
+    now: Callable[[], datetime],
+    clock: Callable[[], float],
+) -> str:
+    """Folder reads and headline digests: read the whole period of every chat, merge, and page the merged list.
+    Every page re-reads the period; the read cursor only says where the previous page stopped."""
+    tz = settings.timezone
+    limit = max(MIN_MESSAGES, min(MAX_MESSAGES, DEFAULT_MESSAGES if limit is None else limit))
+    c: ReadCursor | None = None
+    with _tool_errors():
+        if cursor is not None:
+            c = decode_read_cursor(cursor)
+            if (c.folder_id is not None and chat is not None) or (c.folder_id is None and folder is not None):
+                raise CursorError()
+            span, from_me, headlines = Period(c.start, c.end), c.from_me, c.headlines
+        else:
+            span = parse_period(days, since, until, tz, now(), period)
+            if span.start is None and span.end is None:
+                raise ToolError(
+                    'Reading a folder needs a period, e.g. period="today", period="this_week" or days=3.'
+                    if folder is not None
+                    else 'mode="headlines" needs a period, e.g. period="this_week" or days=7.'
+                )
+    folder_id = c.folder_id if c is not None else None
+    chosen: Folder | None = None
+    single: Chat | None = None
+    with _tool_errors():
+        if folder is not None or folder_id is not None:
+            folders = await source.list_folders()
+            dialogs = await source.list_dialogs()
+            if folder_id is not None:
+                chosen = _folder_by_id(folder_id, folders, dialogs, settings)
+                if folder is not None and _resolve_folder_arg(folder, folders, dialogs, settings).id != folder_id:
+                    raise CursorError(other_folder=True)
+            else:
+                chosen = _resolve_folder_arg(folder, folders, dialogs, settings)
+            members = _folder_members(chosen, dialogs)
+            scope_text = f'folder "{folder_label(chosen)}"'
+        else:
+            arg = chat if chat is not None else str(c.after.chat_id)  # type: ignore[union-attr]  # a cursor knows its chat
+            single = await resolve_chat_arg(source, arg, settings)
+            if c is not None and single.id != c.after.chat_id:
+                raise CursorError(other_chat=True)
+            members = [single]
+            scope_text = f'"{one_line(single.title)}"'
+    with _tool_errors():
+        result = await read_chats(source, members, span.start, span.end, from_me, scope_text=scope_text, clock=clock)
+
+    posts = [m for m in result.messages if m.action is None] if headlines else result.messages
+    items: list[Item]
+    skipped = 0
+    if headlines:
+        with_text = [m for m in posts if headline(m.text) is not None]
+        skipped = len(posts) - len(with_text)
+        items = list(group_reposts(with_text))
+        merged = len(with_text) - len(items)
+    else:
+        items = list(result.messages)
+        merged = 0
+    first_of = (lambda i: i.first) if headlines else (lambda i: i)  # noqa: E731
+    boundary = _read_key_of(c)
+    seen = 0 if boundary is None else sum(_read_key(first_of(i)) <= boundary for i in items)
+    remaining = items[seen:]
+    chats_with_posts = len({m.chat_id for m in posts})
+    where = f" in {chats_with_posts} of {len(members)} chats" if single is None else ""
+
+    def totals(a: int, b: int) -> str:
+        if headlines:
+            extras = [f"{_plural(merged, 'repeat')} merged"] * bool(merged) + [f"{skipped} without text skipped"] * bool(skipped)
+            detail = f" ({', '.join(extras)})" if extras else ""
+            return f"{_plural(len(posts), 'post')}{where} → {_plural(len(items), 'headline')}{detail}; showing {a}–{b}."
+        return f"{_plural(len(posts), 'message')}{where}; showing {a}–{b}."
+
+    def next_hint(last: Message) -> str:
+        token = encode_read_cursor(
+            ReadCursor(
+                SearchOffset(last.chat_id, last.id, last.date), span.start, span.end,
+                chosen.id if chosen is not None else None, headlines, from_me,
+            )
+        )
+        scope = f'folder="{chosen.id}"' if chosen is not None else f'chat="{single.id}"'  # type: ignore[union-attr]
+        return f'call get_messages({scope}, cursor="{token}")'
+
+    when = describe_period(span, tz)
+    if chosen is not None:
+        head = f"Folder: {folder_label(chosen)} ({chosen.id}){SEP}{_plural(len(members), 'chat')}{SEP}{when} ({tz.key})"
+        if from_me:
+            head += "\nFrom me only"
+    else:
+        head = messages_head(single, when, tz, None, from_me) + "\nMode: headlines"  # type: ignore[arg-type]
+    return render_many(
+        head,
+        totals,
+        remaining,
+        offset=seen,
+        chats={m.id: m for m in members},
+        labels=chat_labels(members) if chosen is not None else None,
+        tz=tz,
+        max_chars=settings.max_chars,
+        limit=limit,
+        next_hint=next_hint,
+        empty_text="No posts with text in this period." if headlines else "No messages in this period.",
+    )
+
+
+def _folder_members(folder: Folder, dialogs: list[Chat]) -> list[Chat]:
+    members = folder_chats(folder, dialogs)
+    name = folder_label(folder)
+    if not members:
+        raise ToolError(f'Folder "{name}" has no chats.')
+    if len(members) > MAX_FOLDER_CHATS:
+        raise ToolError(
+            f'Folder "{name}" has {len(members)} chats; folder queries handle up to {MAX_FOLDER_CHATS}. '
+            "Use a smaller folder, or search without folder."
+        )
+    return members
+
+
+def _folder_by_id(folder_id: int, folders: list[Folder], dialogs: list[Chat], settings: Settings) -> Folder:
+    """The folder a cursor was issued for; by id only, since a title match could hit another folder."""
+    found = next((f for f in folders if f.id == folder_id), None)
+    if found is None:
+        missing = FolderNotFoundError(str(folder_id), folders)
+        raise ToolError(folder_not_found_text(missing, dialogs, settings.max_chars))
+    return found
+
+
+def _read_key_of(c: ReadCursor | None) -> tuple[int, int, int] | None:
+    return None if c is None else (int(c.after.date.timestamp()), c.after.chat_id, c.after.message_id)
 
 
 async def _messages_around(source: MessageSource, settings: Settings, chat: Chat, target: int, limit: int) -> str:
@@ -365,6 +563,7 @@ async def search_messages(
     query: str,
     chat: str | None = None,
     *,
+    folder: str | int | None = None,
     days: int | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -381,10 +580,29 @@ async def search_messages(
         raise ToolError(f"query is too long (max {MAX_QUERY_CHARS} chars).")
     limit = max(MIN_HITS, min(MAX_HITS, limit))
     tz = settings.timezone
+    folder = (str(folder).strip() if folder is not None else "") or None
     with _tool_errors():
         parsed = decode_search_cursor(cursor, query) if cursor is not None and cursor.strip() else None
+    if parsed is not None and parsed.scope == "folder" and chat is not None and chat.strip():
+        raise ToolError("This cursor is from a folder search; call search_messages with folder or only the cursor.")
     if parsed is not None and parsed.scope == "global" and chat is not None and chat.strip():
         raise ToolError("This cursor is from a search in all chats; call search_messages without chat.")
+    if parsed is not None and parsed.scope == "global" and folder is not None:
+        raise ToolError("This cursor is from a search in all chats; call search_messages without folder.")
+    if parsed is not None and parsed.scope == "chat" and folder is not None:
+        raise ToolError("This cursor is from a search in one chat; call search_messages with chat or only the cursor.")
+    if chat is not None and chat.strip() and folder is not None:
+        raise ToolError("Pass either chat or folder, not both.")
+    if parsed is not None and parsed.scope == "folder":
+        return await _search_folder(
+            source, settings, query, folder, parsed, limit=limit, tz=tz, from_me=from_me, days=days, since=since,
+            until=until, period=period, now=now,
+        )
+    if folder is not None:
+        return await _search_folder(
+            source, settings, query, folder, None, limit=limit, tz=tz, from_me=from_me, days=days, since=since,
+            until=until, period=period, now=now,
+        )
     if parsed is not None and parsed.scope == "chat" and not (chat and chat.strip()):
         chat = str(parsed.after.chat_id)  # models drop arguments; the cursor knows its chat
     resolved = await resolve_chat_arg(source, chat, settings) if chat and chat.strip() else None
@@ -427,11 +645,70 @@ async def search_messages(
     )
 
 
-def _search_call(
-    query: str, chat: Chat | None, after: SearchOffset, scope: str, period: Period, from_me: bool
+async def _search_folder(
+    source: MessageSource,
+    settings: Settings,
+    query: str,
+    folder: str | None,
+    parsed: SearchCursor | None,
+    *,
+    limit: int,
+    tz: ZoneInfo,
+    from_me: bool,
+    days: int | None,
+    since: str | None,
+    until: str | None,
+    period: str | None,
+    now: Callable[[], datetime],
 ) -> str:
-    token = encode_search_cursor(SearchCursor(scope, after, period.start, period.end, from_me), query)  # type: ignore[arg-type]
-    where = f', chat="{chat.id}"' if chat is not None else ""
+    """Search every chat of a folder with the per-chat search and merge the hits newest first."""
+    with _tool_errors():
+        folders = await source.list_folders()
+        dialogs = await source.list_dialogs()
+        if parsed is not None:
+            chosen = _folder_by_id(parsed.folder_id, folders, dialogs, settings)  # type: ignore[arg-type]
+            if folder is not None and _resolve_folder_arg(folder, folders, dialogs, settings).id != chosen.id:
+                raise CursorError(other_folder=True, tool="search_messages")
+            span, from_me = Period(parsed.start, parsed.end), parsed.from_me
+        else:
+            chosen = _resolve_folder_arg(folder, folders, dialogs, settings)  # type: ignore[arg-type]
+            span = parse_period(days, since, until, tz, now(), period)
+        members = _folder_members(chosen, dialogs)
+        found, more = await search_chats(
+            source, members, query, span.start, span.end, from_me, limit, parsed.after if parsed else None
+        )
+    when = "all time" if span.start is None and span.end is None else describe_period(span, tz)
+    head = search_head(query, None, when, tz, from_me, folder=chosen, folder_size=len(members))
+
+    def next_hint(boundary: Message) -> str:
+        after = SearchOffset(boundary.chat_id, boundary.id, boundary.date)
+        return _search_call(query, None, after, "folder", span, from_me, chosen)
+
+    return render_hits(
+        head,
+        found,
+        chats={c.id: c for c in members},
+        query=query,
+        tz=tz,
+        max_chars=settings.max_chars,
+        more=more,
+        next_hint=next_hint,
+    )
+
+
+def _search_call(
+    query: str,
+    chat: Chat | None,
+    after: SearchOffset,
+    scope: str,
+    period: Period,
+    from_me: bool,
+    folder: Folder | None = None,
+) -> str:
+    folder_id = folder.id if folder is not None else None
+    cursor = SearchCursor(scope, after, period.start, period.end, from_me, folder_id)  # type: ignore[arg-type]
+    token = encode_search_cursor(cursor, query)
+    where = f', chat="{chat.id}"' if chat is not None else f', folder="{folder.id}"' if folder is not None else ""
     return f'call search_messages(query={quote_query(query)}{where}, cursor="{token}")'
 
 

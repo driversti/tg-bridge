@@ -81,20 +81,23 @@ def _moment(value: str | None) -> datetime | None:
     return None if value is None else datetime.fromtimestamp(int(value), UTC)
 
 
-# Search cursor: `{h|g}{message_id}_d{epoch}_{u|n}{abs(chat_id)}[_s{epoch}][_e{epoch}][_m]_q{tag}`.
-# `h` per-chat, `g` global; `d` the boundary hit's date (SearchGlobal pages by it); `u`/`n` positive/negative chat id;
+# Search cursor: `{h|g|o}{message_id}_d{epoch}_{u|n}{abs(chat_id)}[_s{epoch}][_e{epoch}][_k{folder_id}][_m]_q{tag}`.
+# `h` per-chat, `g` global, `o` folder (then `k` names the folder, and only then); `d` the boundary hit's date (SearchGlobal pages by it); `u`/`n` positive/negative chat id;
 # `q` a 3-digit tag of the query, so a cursor re-sent with other words is caught.
-_SEARCH_HEAD = re.compile(r"([hg])(\d+)")
-_SEARCH_FIELD = re.compile(r"([dunseq])(\d+)|m")
+_SEARCH_HEAD = re.compile(r"([hgo])(\d+)")
+_SEARCH_FIELD = re.compile(r"([dunseqk])(\d+)|m")
+_SEARCH_SCOPES = {"h": "chat", "g": "global", "o": "folder"}
+_SCOPE_HEADS = {scope: head for head, scope in _SEARCH_SCOPES.items()}
 
 
 @dataclass(frozen=True)
 class SearchCursor:
-    scope: Literal["chat", "global"]
+    scope: Literal["chat", "global", "folder"]
     after: SearchOffset  # continue with hits older than this one
     start: datetime | None
     end: datetime | None
     from_me: bool
+    folder_id: int | None = None  # set exactly when scope == "folder"
 
 
 def query_tag(query: str) -> str:
@@ -103,7 +106,7 @@ def query_tag(query: str) -> str:
 
 def encode_search_cursor(c: SearchCursor, query: str) -> str:
     parts = [
-        f"{'h' if c.scope == 'chat' else 'g'}{c.after.message_id}",
+        f"{_SCOPE_HEADS[c.scope]}{c.after.message_id}",
         f"d{int(c.after.date.timestamp())}",
         f"{'n' if c.after.chat_id < 0 else 'u'}{abs(c.after.chat_id)}",
     ]
@@ -111,6 +114,8 @@ def encode_search_cursor(c: SearchCursor, query: str) -> str:
         parts.append(f"s{int(c.start.timestamp())}")
     if c.end is not None:
         parts.append(f"e{int(c.end.timestamp())}")
+    if c.folder_id is not None:
+        parts.append(f"k{c.folder_id}")
     if c.from_me:
         parts.append("m")
     parts.append(f"q{query_tag(query)}")
@@ -132,6 +137,8 @@ def decode_search_cursor(s: str, query: str) -> SearchCursor:
         fields[key] = f.group(2) or ""
     if "d" not in fields or ("u" in fields) == ("n" in fields):
         raise invalid
+    if (m.group(1) == "o") != ("k" in fields):
+        raise invalid
     tag = fields.get("q")
     if tag is None or len(tag) != 3:
         raise invalid
@@ -139,10 +146,79 @@ def decode_search_cursor(s: str, query: str) -> SearchCursor:
         raise CursorError(other_query=True, tool="search_messages")
     chat_id = int(fields["u"]) if "u" in fields else -int(fields["n"])
     return SearchCursor(
-        scope="chat" if m.group(1) == "h" else "global",
+        scope=_SEARCH_SCOPES[m.group(1)],  # type: ignore[arg-type]
         after=SearchOffset(chat_id=chat_id, message_id=int(m.group(2)), date=_moment(fields["d"])),
         start=_moment(fields.get("s")),
         end=_moment(fields.get("e")),
+        from_me="m" in fields,
+        folder_id=int(fields["k"]) if "k" in fields else None,
+    )
+
+
+# Read cursor: `r{message_id}_d{epoch}_{u|n}{abs(chat_id)}[_s{epoch}][_e{epoch}][_k{folder_id}][_h][_m]`.
+# Pages a merged multi-chat read (folder reads, headlines). The first three fields are the last shown item (for a repost
+# group: its first post), `s`/`e` the period, `k` the folder (absent = one chat, the boundary's), `h` headlines mode.
+# Every page re-reads the whole period, so the cursor only says where the previous page stopped.
+_READ_HEAD = re.compile(r"r(\d+)")
+_READ_FIELD = re.compile(r"([dunsek])(\d+)|[hm]")
+_READ_START = re.compile(r"r\d")
+
+
+@dataclass(frozen=True)
+class ReadCursor:
+    after: SearchOffset  # boundary: the last shown item (chat_id, message_id, date)
+    start: datetime | None
+    end: datetime | None
+    folder_id: int | None  # None = single chat, after.chat_id
+    headlines: bool
+    from_me: bool
+
+
+def is_read_cursor(s: str) -> bool:
+    return _READ_START.match(s.strip().strip("\"'`").strip()) is not None
+
+
+def encode_read_cursor(c: ReadCursor) -> str:
+    parts = [
+        f"r{c.after.message_id}",
+        f"d{int(c.after.date.timestamp())}",
+        f"{'n' if c.after.chat_id < 0 else 'u'}{abs(c.after.chat_id)}",
+    ]
+    if c.start is not None:
+        parts.append(f"s{int(c.start.timestamp())}")
+    if c.end is not None:
+        parts.append(f"e{int(c.end.timestamp())}")
+    if c.folder_id is not None:
+        parts.append(f"k{c.folder_id}")
+    if c.headlines:
+        parts.append("h")
+    if c.from_me:
+        parts.append("m")
+    return "_".join(parts)
+
+
+def decode_read_cursor(s: str) -> ReadCursor:
+    """Parse a read token; CursorError if it is malformed."""
+    invalid = CursorError()
+    head, *rest = s.strip().strip("\"'`").strip().split("_")
+    if not (m := _READ_HEAD.fullmatch(head)):
+        raise invalid
+    fields: dict[str, str] = {}
+    for part in rest:
+        f = _READ_FIELD.fullmatch(part)
+        key = part if f and f.group(1) is None else (f.group(1) if f else None)
+        if key is None or key in fields:
+            raise invalid
+        fields[key] = f.group(2) or ""
+    if "d" not in fields or ("u" in fields) == ("n" in fields):
+        raise invalid
+    chat_id = int(fields["u"]) if "u" in fields else -int(fields["n"])
+    return ReadCursor(
+        after=SearchOffset(chat_id=chat_id, message_id=int(m.group(1)), date=_moment(fields["d"])),
+        start=_moment(fields.get("s")),
+        end=_moment(fields.get("e")),
+        folder_id=int(fields["k"]) if "k" in fields else None,
+        headlines="h" in fields,
         from_me="m" in fields,
     )
 

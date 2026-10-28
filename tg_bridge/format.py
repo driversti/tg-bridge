@@ -280,7 +280,10 @@ def _message_line(
     text_limit: int | None,
     text_of: Callable[[str, int | None], str] = _text,
     mark: str = "",
+    label: str | None = None,
 ) -> str:
+    """`label`: the chat's short name on multi-chat pages; a channel post then reads `F1 News:`, anyone else
+    `F1 Paddock › Anna:`."""
     parts = []
     if msg.forward_from:
         parts.append(f"⤷fwd {one_line(msg.forward_from)}:")
@@ -293,7 +296,23 @@ def _message_line(
         parts.append(f"↩#{msg.reply_to_id}")
     if msg.edit_date is not None:
         parts.append("✎")
-    return f"{mark}#{msg.id} {stamp} {_sender(msg, seen_people)}: {' '.join(parts)}"
+    who = _sender(msg, seen_people)
+    if label is not None and not _is_chat_itself(msg, who, label):
+        who = f"{label} › {who}"
+    elif label is not None:
+        who = label
+    return f"{mark}#{msg.id} {stamp} {who}: {' '.join(parts)}"
+
+
+def _is_chat_itself(msg: Message, who: str, label: str) -> bool:
+    """A channel post or anonymous admin message is signed with the chat's own title. The label may be a cut or
+    disambiguated form of it (`Long title…`, `News ~890`), so compare against its base."""
+    if msg.sender is not None or msg.out:
+        return False
+    base = label.rsplit(" ~", 1)[0] if re.search(r" ~\d{3}$", label) else label
+    if base.endswith("…"):
+        return who.startswith(base[:-1]) and len(who) >= len(base)
+    return who == base
 
 
 def _sender(msg: Message, seen_people: set[int]) -> str:
@@ -367,8 +386,18 @@ def snippet(text: str, query: str, width: int = SEARCH_TEXT_CHARS) -> str:
     return ("…" if start > 0 else "") + flat[start:end] + ("…" if end < len(flat) else "")
 
 
-def search_head(query: str, chat: Chat | None, period_text: str, tz: ZoneInfo, from_me: bool) -> str:
+def search_head(
+    query: str,
+    chat: Chat | None,
+    period_text: str,
+    tz: ZoneInfo,
+    from_me: bool,
+    folder: Folder | None = None,
+    folder_size: int | None = None,
+) -> str:
     where = f"{one_line(chat.title)} ({chat.id})" if chat else "all chats"
+    if folder is not None:
+        where = f'folder "{folder_label(folder)}" ({folder_size} chats)'
     lines = [f"Search {quote_query(query)} in {where}{SEP}{period_text} ({tz.key})"]
     if from_me:
         lines.append("From me only")

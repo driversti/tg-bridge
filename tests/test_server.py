@@ -102,8 +102,30 @@ async def test_get_messages_tool_schema(settings):
     tools = {t.name: t for t in await build(FakeSource(), settings).list_tools()}
 
     props = tools["get_messages"].input_schema["properties"]
-    assert set(props) == {"chat", "days", "since", "until", "period", "topic", "from_me", "cursor", "around", "limit"}
-    assert tools["get_messages"].input_schema["required"] == ["chat"]
+    assert set(props) == {
+        "chat", "folder", "mode", "days", "since", "until", "period", "topic", "from_me", "cursor", "around", "limit"
+    }
+    assert "required" not in tools["get_messages"].input_schema or tools["get_messages"].input_schema["required"] == []
+
+
+async def test_call_get_messages_folder_headlines(settings):
+    from tests.fakes import make_folder, make_message
+
+    chat = make_chat(id=-2001, kind="channel", title="F1 News")
+    msg = make_message(
+        id=7, chat_id=-2001, text="Norris wins the Mexican GP", sender=None, sender_title="F1 News",
+        date=datetime(2026, 10, 27, 9, 0, tzinfo=UTC),
+    )
+    source = FakeSource(dialogs=[chat], folders=[make_folder(id=5, title="F1", include_ids=(-2001,))], messages={-2001: [msg]})
+
+    result = await build(source, settings).call_tool(
+        "get_messages", {"folder": "F1", "period": "this_week", "mode": "headlines"}
+    )
+
+    assert result.is_error is False
+    text = result.content[0].text
+    assert text.startswith(f"{NOW_LINE}\nFolder: F1 (5)")
+    assert "F1 News #7: Norris wins the Mexican GP" in text
 
 
 async def test_call_get_messages(settings):
@@ -123,7 +145,9 @@ async def test_search_messages_registered_read_only(settings):
 
     t = tools["search_messages"]
     assert t.annotations.read_only_hint is True
-    assert set(t.input_schema["properties"]) == {"query", "chat", "days", "since", "until", "period", "from_me", "cursor", "limit"}
+    assert set(t.input_schema["properties"]) == {
+        "query", "chat", "folder", "days", "since", "until", "period", "from_me", "cursor", "limit"
+    }
     assert t.input_schema["required"] == ["query"]
     assert "NOT meaning" in t.description and "around=<#id>" in t.description
 

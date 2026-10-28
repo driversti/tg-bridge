@@ -183,6 +183,7 @@ class ReadOnlyTelegram:
             "offset_date": query.start if forward else query.end,
             "offset_id": query.boundary_id or 0,  # takes priority over offset_date; forward means "ids greater than"
         }
+        _no_page_sleeps(kwargs, query.limit)
         client_side_from_me = False
         general_only = query.topic_id == GENERAL_TOPIC_ID
         if general_only:
@@ -258,6 +259,7 @@ class ReadOnlyTelegram:
         }
         if query.from_me:
             kwargs["from_user"] = "me"
+        _no_page_sleeps(kwargs, query.limit)
         found: list[Message] = []
         if query.limit > 0:
             async for raw in client.iter_messages(entity, **kwargs):
@@ -428,6 +430,18 @@ class ReadOnlyTelegram:
             seconds = int(getattr(e, "seconds", 0) or 0)
             log.warning("telegram flood wait: %d s", seconds)
             raise RateLimitedError(seconds) from e
+
+
+# Telethon's own threshold: above it iter_messages does not sleep between history pages.
+_NO_WAIT_LIMIT = 3000
+
+
+def _no_page_sleeps(kwargs: dict[str, Any], limit: int) -> None:
+    """We pass limit=None to iter_messages (stopping by hand), and Telethon then sleeps 1 s between every history
+    page. A folder read goes through dozens of chats within one tool call, so ask for no sleep when we stop early
+    anyway. FloodWait handling is separate and unchanged."""
+    if limit <= _NO_WAIT_LIMIT:
+        kwargs["wait_time"] = 0
 
 
 def _in_general(raw: Any, msg: Message) -> bool:

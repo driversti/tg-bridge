@@ -151,8 +151,8 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 | `list_chats(query?, kind?, limit=30, folder?, min_folders?)` | Find/browse dialogs (incl. archived); `folder` (id or title words) limits to that folder, in its order; `min_folders=N` keeps chats in ≥ N folders and names them | id, kind, title, @username, last message date, `deleted_peer` flag |
 | `list_folders()` | The user's chat folders in app order | id, title, kind, chat count, unread chats, rule/explicit summary |
 | `get_chat_info(chat)` | Details of one chat | type, title, folders, description, members count, peer identity, topics (forums) |
-| `get_messages(chat, period…, topic?, around?, cursor?, limit?)` | Read a chat chronologically for a period | compact lines + `next_cursor` + `truncated` flag |
-| `search_messages(query, chat?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat or globally | compact lines with chat name + link |
+| `get_messages(chat \| folder, period…, mode?, topic?, around?, cursor?, limit?)` | Read a chat chronologically for a period; `folder` merges all its chats (period required); `mode="headlines"` one line per post, reposts merged `×N` | compact lines + `next_cursor` + `truncated` flag |
+| `search_messages(query, chat? \| folder?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat, in a folder's chats, or globally | compact lines with chat name + link |
 | `export_chat(chat, period…, format="md")` | Write a conversation to a Markdown file | file path, message count, date range |
 | `find_deleted_users()` | Dialogs whose peer account is deleted | chat id, last known identity, message count, first/last date |
 | `export_deleted_users(dir?)` | One Markdown file per deleted-user dialog | list of paths + counts |

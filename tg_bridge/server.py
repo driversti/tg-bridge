@@ -124,7 +124,9 @@ def build_server(
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def get_messages(
-        chat: str,
+        chat: str | None = None,
+        folder: str | int | None = None,
+        mode: str = "full",
         days: int | None = None,
         since: str | None = None,
         until: str | None = None,
@@ -135,22 +137,24 @@ def build_server(
         around: int | None = None,
         limit: int | None = None,
     ) -> str:
-        """Read one chat's messages in time order, as compact lines grouped by day.
-        `chat`: numeric id, @username, or words from the title.
+        """Read one chat (`chat`: numeric id, @username, or words from the title) or a whole chat folder (`folder`: id or
+        name from list_folders) in time order, as compact lines grouped by day.
+        `mode="headlines"`: one short line per post, the same news from several chats merged into one "×N" line; best
+        for "what's new in <folder>" questions. Needs a period. Folder reads always need a period.
         Period: `period` = today, yesterday, this_week, last_week, this_month, last_month, this_year or last_year;
         OR `days` (1 = today, 2 = since yesterday 00:00, …); OR `since`/`until` (YYYY-MM-DD, "YYYY-MM-DD HH:MM" or a
         keyword; `until` dates include that whole day). Prefer `period` or `days` over computing dates yourself.
         No period = the latest messages.
         `topic`: forum topic id or title words (see get_chat_info). `from_me`: only messages the user sent.
         If the result ends with "Next: call get_messages(...)", more messages exist: make exactly that call, copying
-        chat and cursor character for character (other arguments come from the cursor). To read a whole period,
-        keep calling until the result ends with "End of period."
+        chat or folder and cursor character for character (other arguments, including mode, come from the cursor).
+        To read a whole period, keep calling until the result ends with "End of period."
         `around`: a message #id (e.g. from search_messages): shows the messages just before and after it;
         period, topic and from_me are then ignored."""
         return await stamped(
             lambda m: tools.get_messages(
-                source, budget, chat, days=days, since=since, until=until, period=period, topic=topic,
-                from_me=from_me, cursor=cursor, around=around, limit=limit, now=lambda: m,
+                source, budget, chat, folder=folder, mode=mode, days=days, since=since, until=until, period=period,
+                topic=topic, from_me=from_me, cursor=cursor, around=around, limit=limit, now=lambda: m,
             )
         )
 
@@ -158,6 +162,7 @@ def build_server(
     async def search_messages(
         query: str,
         chat: str | None = None,
+        folder: str | int | None = None,
         days: int | None = None,
         since: str | None = None,
         until: str | None = None,
@@ -168,6 +173,7 @@ def build_server(
     ) -> str:
         """Find messages containing words, in one chat (`chat`: id, @username or title words) or, without `chat`,
         in all the user's chats. Newest hits first, each with its date and #id.
+        `folder`: search every chat of a folder (id or name from list_folders) instead of one chat; not with `chat`.
         Telegram matches whole words and word starts, NOT meaning: if nothing useful comes back, search again with
         other word forms, synonyms, and the other languages people use in that chat (e.g. Ukrainian, Russian,
         Polish, English). One query per call; prefer 1–2 distinctive words.
@@ -176,8 +182,8 @@ def build_server(
         If the result ends with "Next: call search_messages(...)", copy that call exactly to get older hits."""
         return await stamped(
             lambda m: tools.search_messages(
-                source, budget, query, chat, days=days, since=since, until=until, period=period, from_me=from_me,
-                cursor=cursor, limit=limit, now=lambda: m,
+                source, budget, query, chat, folder=folder, days=days, since=since, until=until, period=period,
+                from_me=from_me, cursor=cursor, limit=limit, now=lambda: m,
             )
         )
 

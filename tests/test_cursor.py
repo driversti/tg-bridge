@@ -186,3 +186,97 @@ def test_export_cursor_from_another_chat():
 def test_export_cursor_malformed(token):
     with pytest.raises(CursorError, match="Invalid cursor. Call export_chat again without cursor."):
         decode_export_cursor(token, CHAT)
+
+
+# --- folder search cursor and read cursor ---
+
+from tg_bridge.cursor import ReadCursor, decode_read_cursor, encode_read_cursor, is_read_cursor  # noqa: E402
+
+
+def test_folder_search_cursor_round_trip():
+    c = _sc("folder", 123456, folder_id=5, from_me=True)
+    token = encode_search_cursor(c, "x")
+    assert token.startswith("o4790_d") and "_k5_m_q" in token
+    assert decode_search_cursor(token, "x") == c
+
+
+def test_search_cursor_without_folder_has_none():
+    token = encode_search_cursor(_sc("global"), "x")
+    assert token.startswith("g") and "_k" not in token
+    assert decode_search_cursor(token, "x").folder_id is None
+
+
+@pytest.mark.parametrize("token", ["o1_d5_u1_q%s", "h1_d5_u1_k5_q%s", "g1_d5_u1_k5_q%s"])
+def test_search_cursor_folder_scope_needs_k(token):
+    with pytest.raises(CursorError, match="search_messages"):
+        decode_search_cursor(token % query_tag("x"), "x")
+
+
+def test_other_folder_error_text():
+    e = CursorError(other_folder=True)
+    assert e.args[0].startswith("This cursor belongs to another folder.")
+    assert e.other_folder and not e.other_chat
+
+
+_RD = datetime(2026, 10, 21, 7, 0, tzinfo=UTC)
+
+
+def _rc(chat_id=-1001234567890, **kw):
+    fields = dict(
+        after=SearchOffset(chat_id=chat_id, message_id=4812, date=_RD),
+        start=None, end=None, folder_id=None, headlines=False, from_me=False,
+    )
+    fields.update(kw)
+    return ReadCursor(**fields)
+
+
+@pytest.mark.parametrize("chat_id", [5, -1001234567890])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"start": START},
+        {"end": END},
+        {"folder_id": 5},
+        {"headlines": True},
+        {"from_me": True},
+        {"start": START, "end": END, "folder_id": 5, "headlines": True, "from_me": True},
+    ],
+)
+def test_read_cursor_round_trip(chat_id, extra):
+    c = _rc(chat_id, **extra)
+    token = encode_read_cursor(c)
+    assert decode_read_cursor(token) == c
+    assert decode_read_cursor(token).after.date.tzinfo is UTC
+
+
+def test_read_cursor_exact_token():
+    c = ReadCursor(
+        after=SearchOffset(-1001234567890, 4812, datetime.fromtimestamp(1792969200, UTC)),
+        start=datetime.fromtimestamp(1792800000, UTC),
+        end=datetime.fromtimestamp(1793404800, UTC),
+        folder_id=5,
+        headlines=True,
+        from_me=False,
+    )
+    assert encode_read_cursor(c) == "r4812_d1792969200_n1001234567890_s1792800000_e1793404800_k5_h"
+
+
+def test_read_cursor_from_me_token():
+    assert encode_read_cursor(_rc(5, from_me=True)).endswith("_u5_m")
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["garbage", "", "r1_u1", "r1_d5", "r1_d5_d6_u1", "r1_d5_u1_n1", "r1_d5_u1_h_h", "r1_d5_u1_x3", "f1_d5_u1", "r_d5_u1"],
+)
+def test_read_cursor_garbage(token):
+    with pytest.raises(CursorError, match="Invalid cursor"):
+        decode_read_cursor(token)
+
+
+def test_is_read_cursor():
+    assert is_read_cursor("r12_d1_u5")
+    assert not is_read_cursor("f6782037_c795")
+    assert not is_read_cursor("garbage")
+    assert is_read_cursor(' "r12_d1_u5" ')
