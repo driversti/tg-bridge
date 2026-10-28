@@ -165,6 +165,66 @@ async def test_list_chats_without_folder_does_not_touch_folders(settings):
     assert source.list_folders_calls == []
 
 
+# --- list_chats(min_folders=) ----------------------------------------------------
+
+
+def overlap_source() -> FakeSource:
+    """-1 in three folders, -2 in two, -3 in one, -4 in none."""
+    chats = [make_chat(id=-i, kind="channel", title=f"C{i}") for i in range(1, 5)]
+    folders = [
+        make_folder(id=2, title="WAR", emoticon="🪖", include_ids=(-2, -1)),
+        make_folder(id=3, title="News", include_ids=(-1, -2, -3)),
+        make_folder(id=4, title="F1", include_ids=(-1,)),
+    ]
+    return FakeSource(dialogs=chats, folders=folders)
+
+
+async def test_min_folders_lists_overlaps_with_their_folders_most_first(settings):
+    text = await tools.list_chats(overlap_source(), settings, min_folders=2)
+
+    lines = text.splitlines()
+    assert lines[0] == "Chats in 2+ folders (2 shown of 2)"
+    assert lines[1].startswith("Totals: 2 channel")
+    assert lines[2].startswith("-1 · channel · C1") and lines[2].endswith(" · folders: WAR, News, F1")
+    assert lines[3].startswith("-2 · channel · C2") and lines[3].endswith(" · folders: WAR, News")
+
+
+async def test_min_folders_one_means_in_any_folder(settings):
+    text = await tools.list_chats(overlap_source(), settings, min_folders=1)
+
+    assert text.splitlines()[0] == "Chats in 1+ folders (3 shown of 3)"
+    assert "C4" not in text
+
+
+async def test_min_folders_combines_with_folder_and_query(settings):
+    source = overlap_source()
+
+    in_news = await tools.list_chats(source, settings, folder="News", min_folders=2)
+    by_query = await tools.list_chats(source, settings, query="c2", min_folders=2)
+
+    assert in_news.splitlines()[0] == 'Chats in folder "News", in 2+ folders (2 shown of 2)'
+    assert by_query.splitlines()[0] == 'Chats matching "c2", in 2+ folders (1 shown of 1)'
+
+
+async def test_min_folders_none_match(settings):
+    text = await tools.list_chats(overlap_source(), settings, min_folders=4)
+
+    assert text == "No chats are in 4+ folders."
+
+
+async def test_min_folders_below_one_rejected(settings):
+    with pytest.raises(ToolError, match="min_folders"):
+        await tools.list_chats(overlap_source(), settings, min_folders=0)
+
+
+async def test_min_folders_reads_folders_once(settings):
+    source = overlap_source()
+
+    await tools.list_chats(source, settings, folder="News", min_folders=2)
+
+    assert source.list_folders_calls == [False]
+
+
 # --- get_chat_info -------------------------------------------------------------
 
 

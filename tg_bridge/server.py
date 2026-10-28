@@ -90,17 +90,24 @@ def build_server(
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def list_chats(
-        query: str | None = None, kind: str | None = None, limit: int = 30, folder: str | None = None
+        query: str | None = None,
+        kind: str | None = None,
+        limit: int = 30,
+        folder: str | None = None,
+        min_folders: int | None = None,
     ) -> str:
         """List the user's Telegram chats (private, groups, channels, bots, incl. archived), newest first.
         `query`: words from the chat title or @username. `kind`: user, bot, group (incl. supergroups),
         supergroup, channel. The second line has totals per kind for all matches, so for "how many" questions
         use limit=1 and read the numbers as given ("public"/"private" = groups/channels with/without
         an @username). `folder`: folder id or title words (see list_folders): only that folder's chats, in the
-        folder's order.
+        folder's order. `min_folders`: only chats that sit in at least this many folders, each line ending with
+        its folders (e.g. min_folders=2 for "chats in two or more folders"; don't check chats one by one).
         Then one line per chat starting with its numeric id; pass that id to other tools."""
         return await stamped(
-            lambda _: tools.list_chats(source, budget, query=query, kind=kind, limit=limit, folder=folder)
+            lambda _: tools.list_chats(
+                source, budget, query=query, kind=kind, limit=limit, folder=folder, min_folders=min_folders
+            )
         )
 
     @server.tool(annotations=READ_ONLY, structured_output=False)

@@ -118,16 +118,20 @@ async def list_chats(
     kind: str | None = None,
     limit: int = 30,
     folder: str | None = None,
+    min_folders: int | None = None,
 ) -> str:
     kinds = _kinds(kind)
     limit = max(MIN_LIMIT, min(MAX_LIMIT, limit))
     query = (query or "").strip() or None
     folder = (folder or "").strip() or None
+    if min_folders is not None and min_folders < 1:
+        raise ToolError("min_folders must be at least 1.")
     with _tool_errors():
         chats = await source.list_dialogs()
+        folders = await source.list_folders() if folder is not None or min_folders is not None else []
     scope = ""
     if folder is not None:
-        chosen = await _resolve_folder_arg(source, folder, chats, settings)
+        chosen = _resolve_folder_arg(folder, folders, chats, settings)
         scope = f' in folder "{folder_label(chosen)}"'
         chats = folder_chats(chosen, chats)
         if not chats:
@@ -142,15 +146,29 @@ async def list_chats(
         return f'No chats match "{query}".' if query else "No chats found."
     # Archived dialogs come after the non-archived ones; sorted() is stable so Telegram's order is kept inside each.
     # A folder keeps its own order: the app shows archived members in place.
-    shown = (chats if folder is not None else sorted(chats, key=lambda c: c.is_archived))[:limit]
+    if folder is None:
+        chats = sorted(chats, key=lambda c: c.is_archived)
     label = f"Chats{scope}" + (f' matching "{query}"' if query else "")
+    memberships: dict[int, list[Folder]] = {}
+    if min_folders is not None:
+        # Overlaps are computed here: intersecting several list_chats(folder=) pages is beyond a small model.
+        memberships = {c.id: chat_folders(c, folders) for c in chats}
+        chats = sorted((c for c in chats if len(memberships[c.id]) >= min_folders), key=lambda c: -len(memberships[c.id]))
+        label += f"{',' if scope or query else ''} in {min_folders}+ folders"
+        if not chats:
+            matching = f' matching "{query}"' if query else ""
+            return f"No chats{scope}{matching} are in {min_folders}+ folders."
+    shown = chats[:limit]
     header = f"{label} ({len(shown)} shown of {len(chats)})\n{_totals(chats)}"
-    return render_lines(header, [chat_line(c, settings.timezone) for c in shown], settings.max_chars)
+    lines = [chat_line(c, settings.timezone) for c in shown]
+    if min_folders is not None:
+        lines = [
+            f"{line}{SEP}folders: {', '.join(one_line(f.title) for f in memberships[c.id])}" for line, c in zip(lines, shown)
+        ]
+    return render_lines(header, lines, settings.max_chars)
 
 
-async def _resolve_folder_arg(source: MessageSource, arg: str, chats: list[Chat], settings: Settings) -> Folder:
-    with _tool_errors():
-        folders = await source.list_folders()
+def _resolve_folder_arg(arg: str, folders: list[Folder], chats: list[Chat], settings: Settings) -> Folder:
     try:
         return resolve_folder(arg, folders)
     except FolderNotFoundError as e:

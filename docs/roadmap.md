@@ -53,4 +53,5 @@ _(deviations from design, one line each)_
 - 04: LM Studio ends a tool call after ~60 s, so one `export_chat` call pauses after 40 s and the model continues with `resume=true`; the state sits in a hidden note at the end of the file (a ~55-char cursor got garbled on the 5th call). Smoke: 48 835 messages in 12 calls, ~14 min, one file.
 - 04: message `#id`/`↩#id` are t.me links where the chat has them; `export_chat` is annotated not read-only (it writes a local file).
 - 06: `DownloadResult` also carries `file_count` (the paused text needs "n/total files"); an album with a single downloadable file is treated as a plain single download.
+- 07: `list_chats` gained `min_folders` (smoke: asked for chats in 2+ folders, the model started calling `get_chat_info` on all 888 chats instead of intersecting per-folder lists).
 - 09: LM Studio does not pass the MCP server `instructions` to the model (smoke 2026-10-28: asked without tools, it answered "[current date]" and could not quote them), so the date reaches the model only via the `Now:` line and `now()`. Also beyond the brief: `last_year` keyword, `TG_BRIDGE_MAX_CHARS` ≥ 500.
