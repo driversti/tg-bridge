@@ -6,16 +6,16 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, MediaFile, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, SearchQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
 
 log = logging.getLogger(__name__)
 
 
 class DialogStore(Protocol):
-    def load(self, now: float, max_age: float) -> tuple[list[Chat], float] | None: ...
+    def load(self, now: float, max_age: float) -> tuple[list[Chat], list[Folder], float] | None: ...
 
-    def save(self, chats: list[Chat], now: float) -> None: ...
+    def save(self, chats: list[Chat], folders: list[Folder], now: float) -> None: ...
 
 
 class LiveSource:
@@ -37,6 +37,7 @@ class LiveSource:
         # One lock for connect + dialog cache: concurrent first calls trigger one connect and one fetch.
         self._lock = asyncio.Lock()
         self._dialogs: list[Chat] | None = None
+        self._folders: list[Folder] = []
         self._dialogs_at = 0.0
 
     async def whoami(self) -> Person:
@@ -44,16 +45,25 @@ class LiveSource:
         return await self._telegram.get_me()
 
     async def list_dialogs(self, *, refresh: bool = False) -> list[Chat]:
+        return (await self._snapshot(refresh))[0]
+
+    async def list_folders(self, *, refresh: bool = False) -> list[Folder]:
+        return (await self._snapshot(refresh))[1]
+
+    async def _snapshot(self, refresh: bool) -> tuple[list[Chat], list[Folder]]:
+        """Dialogs and folders always come from the same fetch: folder rules are evaluated over the dialog list."""
         async with self._lock:
             fresh = self._dialogs is not None and self._clock() - self._dialogs_at < self._dialogs_ttl
             if not fresh and not refresh:
                 fresh = self._load_from_disk()
             if refresh or not fresh:
                 await self._connect_locked()
-                self._dialogs = await self._telegram.list_dialogs()  # a failure leaves the old cache untouched
-                self._dialogs_at = self._clock()
+                # Fetch both before storing either: a failure leaves the old snapshot untouched.
+                dialogs = await self._telegram.list_dialogs()
+                folders = await self._telegram.list_folders()
+                self._dialogs, self._folders, self._dialogs_at = dialogs, folders, self._clock()
                 self._save_to_disk()
-            return list(self._dialogs or [])
+            return list(self._dialogs or []), list(self._folders)
 
     def _load_from_disk(self) -> bool:
         if self._dialog_cache is None:
@@ -61,15 +71,15 @@ class LiveSource:
         hit = self._dialog_cache.load(self._clock(), self._dialogs_ttl)
         if hit is None:
             return False
-        self._dialogs, self._dialogs_at = hit
-        log.info("loaded %d dialogs from disk cache", len(self._dialogs))
+        self._dialogs, self._folders, self._dialogs_at = hit
+        log.info("loaded %d dialogs and %d folders from disk cache", len(self._dialogs), len(self._folders))
         return True
 
     def _save_to_disk(self) -> None:
         if self._dialog_cache is None or self._dialogs is None:
             return
         try:
-            self._dialog_cache.save(self._dialogs, self._dialogs_at)
+            self._dialog_cache.save(self._dialogs, self._folders, self._dialogs_at)
         except OSError as e:
             # The cache is an optimisation; the fetched list is still good.
             log.warning("could not write dialog cache: %s", type(e).__name__)

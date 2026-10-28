@@ -8,6 +8,7 @@ import itertools
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from telethon import TelegramClient, utils
@@ -21,6 +22,7 @@ from tg_bridge.source import (
     MEDIA_CHUNK,
     Chat,
     ChatInfo,
+    Folder,
     MediaFile,
     Message,
     MessageQuery,
@@ -32,6 +34,7 @@ from tg_bridge.source import (
 from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import (
     chat_from_dialog,
+    folder_from_tl,
     largest_photo_size,
     media_file_from_tl,
     message_from_tl,
@@ -90,15 +93,51 @@ class ReadOnlyTelegram:
     async def list_dialogs(self) -> list[Chat]:
         client = self._connected()
         started = time.monotonic()
+        raw_dialogs = await self._raw_dialogs(client)
+        defaults = await self._mute_defaults(client)
+        now = datetime.now(UTC)
+        chats = [chat_from_dialog(d, defaults, now) for d in raw_dialogs]
+        log.info("fetched %d dialogs in %.2f s", len(chats), time.monotonic() - started)
+        return chats
 
+    async def _raw_dialogs(self, client: Any) -> list[Any]:
         async def collect() -> list[Any]:
             # No archived=/folder= filter: Telegram then returns every folder. Migrated basic groups
             # would otherwise show up next to the supergroup they became.
             return [d async for d in client.iter_dialogs(ignore_migrated=True)]
 
-        chats = [chat_from_dialog(d) for d in await self._call(collect)]
-        log.info("fetched %d dialogs in %.2f s", len(chats), time.monotonic() - started)
-        return chats
+        return await self._call(collect)
+
+    async def _mute_defaults(self, client) -> dict[str, datetime | None]:
+        """Account-wide mute_until per chat category; chats without an own setting inherit it."""
+        defaults: dict[str, datetime | None] = {}
+        for category, peer in (
+            ("users", tl.InputNotifyUsers()),
+            ("chats", tl.InputNotifyChats()),
+            ("broadcasts", tl.InputNotifyBroadcasts()),
+        ):
+            try:
+                settings = await self._call(
+                    lambda peer=peer: client(functions.account.GetNotifySettingsRequest(peer))
+                )
+            except (RPCError, RateLimitedError) as e:
+                # Only the "muted" flag of chats without an own setting depends on it; not worth failing the list.
+                log.warning("notify defaults unavailable for %s: %s", category, type(e).__name__)
+                continue
+            defaults[category] = settings.mute_until
+        return defaults
+
+    async def list_folders(self) -> list[Folder]:
+        """The user's chat folders in app order, without the built-in "All chats"."""
+        client = self._connected()
+        started = time.monotonic()
+        response = await self._call(lambda: client(functions.messages.GetDialogFiltersRequest()))
+        raw_filters = getattr(response, "filters", response)  # layer 229: messages.DialogFilters; older: a bare list
+        me = await self._call(lambda: client.get_me(input_peer=True))
+        self_id = utils.get_peer_id(me)
+        folders = [f for f in (folder_from_tl(raw, self_id) for raw in raw_filters) if f is not None]
+        log.info("fetched %d folders in %.2f s", len(folders), time.monotonic() - started)
+        return folders
 
     async def get_chat_details(self, chat: Chat) -> ChatInfo:
         client = self._connected()
@@ -352,7 +391,7 @@ class ReadOnlyTelegram:
         except ValueError:
             # The session's entity cache is cold (the dialog list came from our disk cache, not Telegram):
             # listing dialogs fills it, then the lookup works.
-            await self.list_dialogs()
+            await self._raw_dialogs(client)
             return await self._call(lambda: client.get_input_entity(chat_id))
 
     async def _forum_topics(self, client: Any, entity: Any) -> tuple[list[Topic], int | None]:

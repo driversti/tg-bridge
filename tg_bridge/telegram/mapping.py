@@ -1,13 +1,17 @@
 """Telethon objects → domain models."""
 
 import dataclasses
+import logging
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from telethon import utils
+from telethon import helpers, utils
 from telethon.tl import types as tl
 
-from tg_bridge.source import Chat, ChatKind, MediaFile, MediaInfo, MediaKind, Message, Person, Topic
+from tg_bridge.source import Chat, ChatKind, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Topic
+
+log = logging.getLogger(__name__)
 
 
 def person_from_user(user) -> Person:
@@ -19,10 +23,14 @@ def person_from_user(user) -> Person:
         phone=user.phone,
         is_deleted=bool(user.deleted),
         is_bot=bool(user.bot),
+        is_contact=bool(getattr(user, "contact", False)),
     )
 
 
-def chat_from_dialog(dialog) -> Chat:
+def chat_from_dialog(
+    dialog, muted_by_default: Mapping[str, datetime | None] | None = None, now: datetime | None = None
+) -> Chat:
+    """`muted_by_default` holds the account-wide mute_until per category ("users", "chats", "broadcasts")."""
     entity = dialog.entity
     peer: Person | None = None
     forum = False
@@ -37,6 +45,17 @@ def chat_from_dialog(dialog) -> Chat:
     else:  # Chat, ChatForbidden
         kind = "group"
         title, username = entity.title, None
+    raw = getattr(dialog, "dialog", None)  # Telethon's wrapper around the raw tl.Dialog; absent in some fakes
+    mentions = getattr(raw, "unread_mentions_count", 0) or 0
+    unread = (
+        (getattr(raw, "unread_count", 0) or 0) > 0
+        or bool(getattr(raw, "unread_mark", False))
+        or mentions > 0
+        or (getattr(raw, "unread_reactions_count", 0) or 0) > 0
+    )
+    own_mute = getattr(getattr(raw, "notify_settings", None), "mute_until", None)
+    # An own setting, even an expired one, beats the account default for the category.
+    mute_until = own_mute if own_mute is not None else (muted_by_default or {}).get(_mute_category(kind))
     return Chat(
         id=dialog.id,
         kind=kind,
@@ -46,7 +65,81 @@ def chat_from_dialog(dialog) -> Chat:
         last_message_at=_utc(getattr(dialog, "date", None)),
         is_archived=getattr(dialog, "folder_id", None) == 1,
         is_forum=forum,
+        is_muted=_is_muted(mute_until, now),
+        is_unread=unread,
+        has_unread_mention=mentions > 0,
     )
+
+
+def _mute_category(kind: ChatKind) -> str:
+    return {"user": "users", "bot": "users", "group": "chats", "supergroup": "chats", "channel": "broadcasts"}[kind]
+
+
+def _is_muted(mute_until: datetime | None, now: datetime | None) -> bool:
+    until = _utc(mute_until)
+    return until is not None and until > (now or datetime.now(UTC))
+
+
+def folder_from_tl(raw, self_id: int) -> Folder | None:
+    """None for the built-in "All chats" entry and for filter types this layer doesn't know."""
+    if isinstance(raw, tl.DialogFilter):
+        custom = True
+    elif isinstance(raw, tl.DialogFilterChatlist):
+        custom = False  # shared folders have no rules and no excludes
+    else:
+        return None
+
+    def flag(name: str) -> bool:
+        return custom and bool(getattr(raw, name, False))
+
+    return Folder(
+        id=raw.id,
+        title=_plain_title(raw.title, raw.id),
+        emoticon=raw.emoticon or None,
+        kind="custom" if custom else "shared",
+        contacts=flag("contacts"),
+        non_contacts=flag("non_contacts"),
+        groups=flag("groups"),
+        broadcasts=flag("broadcasts"),
+        bots=flag("bots"),
+        exclude_muted=flag("exclude_muted"),
+        exclude_read=flag("exclude_read"),
+        exclude_archived=flag("exclude_archived"),
+        pinned_ids=_peer_ids(raw.pinned_peers, self_id),
+        include_ids=_peer_ids(raw.include_peers, self_id),
+        exclude_ids=_peer_ids(raw.exclude_peers, self_id) if custom else (),
+    )
+
+
+def _peer_ids(peers, self_id: int) -> tuple[int, ...]:
+    ids: list[int] = []
+    skipped = 0
+    for peer in peers:
+        if isinstance(peer, tl.InputPeerSelf):
+            ids.append(self_id)
+        elif isinstance(peer, (tl.InputPeerUser, tl.InputPeerChat, tl.InputPeerChannel)):
+            ids.append(utils.get_peer_id(peer))
+        else:
+            skipped += 1
+    if skipped:
+        log.warning("skipped %d folder peers of unsupported type", skipped)
+    return tuple(ids)
+
+
+def _plain_title(title, folder_id: int) -> str:
+    """Folder titles are TextWithEntities since layer 160-ish; custom emoji spans can't be shown as text."""
+    if isinstance(title, str):
+        text = title
+    else:
+        # Entity offsets count UTF-16 units, so cut on the surrogate-encoded text, back to front.
+        text = helpers.add_surrogate(title.text)
+        spans = sorted(
+            ((e.offset, e.length) for e in title.entities if isinstance(e, tl.MessageEntityCustomEmoji)), reverse=True
+        )
+        for offset, length in spans:
+            text = text[:offset] + text[offset + length :]
+        text = helpers.del_surrogate(text)
+    return " ".join(text.split()) or f"(folder {folder_id})"
 
 
 def topic_from_forum_topic(topic) -> Topic | None:

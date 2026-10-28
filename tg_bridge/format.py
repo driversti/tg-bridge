@@ -7,8 +7,9 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError
-from tg_bridge.source import Chat, ChatInfo, MediaInfo, Message, Person, Topic
+from tg_bridge.errors import AmbiguousChatError, AmbiguousFolderError, ChatNotFoundError, FolderNotFoundError
+from tg_bridge.folders import folder_chats, rule_summary
+from tg_bridge.source import Chat, ChatInfo, Folder, MediaInfo, Message, Person, Topic
 
 TRUNCATED = "(output truncated: narrow with query/kind)"
 MAX_CANDIDATES = 10
@@ -61,7 +62,8 @@ def render_lines(header: str, lines: list[str], max_chars: int) -> str:
     return f"{out}\n{TRUNCATED}"
 
 
-def chat_info_block(info: ChatInfo, tz: ZoneInfo) -> str:
+def chat_info_block(info: ChatInfo, tz: ZoneInfo, folders: Sequence[Folder] | None = None) -> str:
+    """`folders`: the folders this chat is in; None leaves the line out (they could not be loaded)."""
     chat = info.chat
     flags = [chat.kind]
     if chat.is_forum:
@@ -74,6 +76,8 @@ def chat_info_block(info: ChatInfo, tz: ZoneInfo) -> str:
     if chat.last_message_at:
         ident.append(f"last message {_when(chat.last_message_at, tz)}")
     lines = [f"{one_line(chat.title)} — {', '.join(flags)}", SEP.join(ident)]
+    if folders is not None:
+        lines.append("Folders: " + (", ".join(one_line(f.title) for f in folders) or "none"))
 
     if chat.peer is not None:
         lines.append(_peer_line(chat.peer))
@@ -118,6 +122,42 @@ def not_found_text(e: ChatNotFoundError, tz: ZoneInfo, max_chars: int) -> str:
     if not e.suggestions:
         return f'No chat matches "{e.arg}". Use list_chats with a query to search for it.'
     return render_lines(f'No chat matches "{e.arg}". Closest:', _candidate_lines(e.suggestions, tz), max_chars)
+
+
+# --- folders ---------------------------------------------------------------
+
+
+def folder_label(folder: Folder) -> str:
+    title = one_line(folder.title)
+    return f"{title} {folder.emoticon}" if folder.emoticon else title
+
+
+def folder_line(folder: Folder, chats: Sequence[Chat]) -> str:
+    """`chats`: the whole dialog list; membership is computed here."""
+    members = folder_chats(folder, chats)
+    unread = sum(c.is_unread for c in members)
+    return SEP.join(
+        [str(folder.id), folder_label(folder), folder.kind, f"{len(members)} chats", f"{unread} unread", rule_summary(folder)]
+    )
+
+
+def folders_text(folders: Sequence[Folder], chats: Sequence[Chat], max_chars: int) -> str:
+    if not folders:
+        return "No chat folders."
+    return render_lines(f"Folders ({len(folders)})", [folder_line(f, chats) for f in folders], max_chars)
+
+
+def folder_ambiguous_text(e: AmbiguousFolderError, chats: Sequence[Chat], max_chars: int) -> str:
+    header = f'Folder "{e.arg}" is ambiguous; pass one of these ids:'
+    return render_lines(header, [folder_line(f, chats) for f in e.candidates], max_chars)
+
+
+def folder_not_found_text(e: FolderNotFoundError, chats: Sequence[Chat], max_chars: int) -> str:
+    if not e.folders:
+        return f'No folder matches "{e.arg}": the user has no chat folders.'
+    return render_lines(
+        f'No folder matches "{e.arg}". Folders:', [folder_line(f, chats) for f in e.folders], max_chars
+    )
 
 
 # --- messages --------------------------------------------------------------

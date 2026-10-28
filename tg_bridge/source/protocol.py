@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, MediaFile, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, SearchQuery
 
 
 class MessageSource(Protocol):
@@ -17,6 +17,10 @@ class MessageSource(Protocol):
 
     async def list_dialogs(self, *, refresh: bool = False) -> list[Chat]:
         """All the user's dialogs (incl. archived) in Telegram order; `refresh` bypasses any cache."""
+        ...
+
+    async def list_folders(self, *, refresh: bool = False) -> list[Folder]:
+        """The user's chat folders in app order (no "All Chats"), from the same cache as list_dialogs."""
         ...
 
     async def get_chat_info(self, chat: Chat) -> ChatInfo:

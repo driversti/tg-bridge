@@ -20,8 +20,10 @@ from tg_bridge.cursor import (
 )
 from tg_bridge.errors import (
     AmbiguousChatError,
+    AmbiguousFolderError,
     ChatNotFoundError,
     CursorError,
+    FolderNotFoundError,
     MediaError,
     MessageNotFoundError,
     NotLoggedInError,
@@ -34,6 +36,10 @@ from tg_bridge.format import (
     ambiguous_text,
     chat_info_block,
     chat_line,
+    folder_ambiguous_text,
+    folder_label,
+    folder_not_found_text,
+    folders_text,
     messages_head,
     not_found_text,
     one_line,
@@ -45,9 +51,10 @@ from tg_bridge.format import (
     search_head,
     size_text,
 )
+from tg_bridge.folders import chat_folders, folder_chats, resolve_folder
 from tg_bridge.media import DownloadResult, SavedFile, download_message_media, safe_mime
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
-from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
+from tg_bridge.source import Chat, Folder, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
 from tg_bridge.timerange import Period, describe_period, now_details, parse_period
 
 KINDS = ("user", "bot", "group", "supergroup", "channel")
@@ -110,23 +117,53 @@ async def list_chats(
     query: str | None = None,
     kind: str | None = None,
     limit: int = 30,
+    folder: str | None = None,
 ) -> str:
     kinds = _kinds(kind)
     limit = max(MIN_LIMIT, min(MAX_LIMIT, limit))
     query = (query or "").strip() or None
+    folder = (folder or "").strip() or None
     with _tool_errors():
         chats = await source.list_dialogs()
+    scope = ""
+    if folder is not None:
+        chosen = await _resolve_folder_arg(source, folder, chats, settings)
+        scope = f' in folder "{folder_label(chosen)}"'
+        chats = folder_chats(chosen, chats)
+        if not chats:
+            return f'Folder "{folder_label(chosen)}" has no chats.'
     if kinds is not None:
         chats = [c for c in chats if c.kind in kinds]
     if query is not None:
         chats = match_chats(query, chats)
     if not chats:
+        if scope:
+            return f'No chats{scope} match "{query}".' if query else f"No chats{scope} of that kind."
         return f'No chats match "{query}".' if query else "No chats found."
     # Archived dialogs come after the non-archived ones; sorted() is stable so Telegram's order is kept inside each.
-    shown = sorted(chats, key=lambda c: c.is_archived)[:limit]
-    label = f'Chats matching "{query}"' if query else "Chats"
+    # A folder keeps its own order: the app shows archived members in place.
+    shown = (chats if folder is not None else sorted(chats, key=lambda c: c.is_archived))[:limit]
+    label = f"Chats{scope}" + (f' matching "{query}"' if query else "")
     header = f"{label} ({len(shown)} shown of {len(chats)})\n{_totals(chats)}"
     return render_lines(header, [chat_line(c, settings.timezone) for c in shown], settings.max_chars)
+
+
+async def _resolve_folder_arg(source: MessageSource, arg: str, chats: list[Chat], settings: Settings) -> Folder:
+    with _tool_errors():
+        folders = await source.list_folders()
+    try:
+        return resolve_folder(arg, folders)
+    except FolderNotFoundError as e:
+        raise ToolError(folder_not_found_text(e, chats, settings.max_chars)) from e
+    except AmbiguousFolderError as e:
+        raise ToolError(folder_ambiguous_text(e, chats, settings.max_chars)) from e
+
+
+async def list_folders(source: MessageSource, settings: Settings) -> str:
+    with _tool_errors():
+        chats = await source.list_dialogs()
+        folders = await source.list_folders()
+    return folders_text(folders, chats, settings.max_chars)
 
 
 def _totals(chats: list[Chat]) -> str:
@@ -161,7 +198,11 @@ async def get_chat_info(source: MessageSource, settings: Settings, chat: str) ->
     resolved = await resolve_chat_arg(source, chat, settings)
     with _tool_errors():
         info = await source.get_chat_info(resolved)
-    return chat_info_block(info, settings.timezone)
+    try:
+        folders = chat_folders(resolved, await source.list_folders())
+    except TgBridgeError:
+        folders = None  # the folders line is a bonus: don't fail the call over it
+    return chat_info_block(info, settings.timezone, folders)
 
 
 async def get_messages(

@@ -14,6 +14,7 @@ class Person:
     phone: str | None
     is_deleted: bool
     is_bot: bool
+    is_contact: bool = False
 
     @property
     def display_name(self) -> str:
@@ -36,10 +37,36 @@ class Chat:
     last_message_at: datetime | None  # aware UTC
     is_archived: bool
     is_forum: bool
+    # Dialog state, only what folder rules need; not printed in chat lines.
+    is_muted: bool = False
+    is_unread: bool = False
+    has_unread_mention: bool = False
 
     @property
     def deleted_peer(self) -> bool:
         return self.peer is not None and self.peer.is_deleted
+
+
+FolderKind = Literal["custom", "shared"]
+
+
+@dataclass(frozen=True)
+class Folder:
+    id: int
+    title: str  # plain text, custom emoji removed
+    emoticon: str | None
+    kind: FolderKind
+    contacts: bool
+    non_contacts: bool
+    groups: bool
+    broadcasts: bool
+    bots: bool
+    exclude_muted: bool
+    exclude_read: bool
+    exclude_archived: bool
+    pinned_ids: tuple[int, ...]  # marked ids, folder order
+    include_ids: tuple[int, ...]
+    exclude_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)

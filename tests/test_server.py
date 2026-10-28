@@ -31,7 +31,8 @@ async def test_lists_tools(settings):
     tools = await build(FakeSource(), settings).list_tools()
 
     assert sorted(t.name for t in tools) == [
-        "download_media", "export_chat", "get_chat_info", "get_messages", "list_chats", "now", "search_messages", "whoami",
+        "download_media", "export_chat", "get_chat_info", "get_messages", "list_chats", "list_folders", "now",
+        "search_messages", "whoami",
     ]
     # export_chat and download_media write local files; every other tool changes nothing at all.
     assert all(t.annotations.read_only_hint is (t.name not in ("export_chat", "download_media")) for t in tools)
@@ -57,6 +58,26 @@ async def test_call_list_chats_returns_tools_layer_text(settings):
         "Totals: 1 supergroup · 1 private\n"
         "-1 · supergroup · Family · last 2026-10-25 13:03"
     ]
+
+
+async def test_call_list_folders(settings):
+    from tests.fakes import make_folder
+
+    source = FakeSource(dialogs=[make_chat(id=-1)], folders=[make_folder(id=2, title="WAR", include_ids=(-1,))])
+    server = build(source, settings)
+    tool = next(t for t in await server.list_tools() if t.name == "list_folders")
+
+    result = await server.call_tool("list_folders", {})
+
+    assert tool.annotations.read_only_hint is True
+    assert tool.annotations.destructive_hint is False
+    assert result.content[0].text.startswith(f"{NOW_LINE}\nFolders (1)")
+
+
+async def test_list_chats_tool_has_folder_param(settings):
+    tools = {t.name: t for t in await build(FakeSource(), settings).list_tools()}
+
+    assert "folder" in tools["list_chats"].input_schema["properties"]
 
 
 async def test_call_get_chat_info(settings):
@@ -143,6 +164,7 @@ MINIMAL_ARGS: dict[str, dict] = {
     "search_messages": {"query": "hi"},
     "export_chat": {"chat": "family"},
     "download_media": {"chat": "family", "message_id": 7},
+    "list_folders": {},
 }
 
 

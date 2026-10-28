@@ -89,19 +89,30 @@ def build_server(
         return await stamped(lambda _: tools.whoami(source))
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
-    async def list_chats(query: str | None = None, kind: str | None = None, limit: int = 30) -> str:
+    async def list_chats(
+        query: str | None = None, kind: str | None = None, limit: int = 30, folder: str | None = None
+    ) -> str:
         """List the user's Telegram chats (private, groups, channels, bots, incl. archived), newest first.
         `query`: words from the chat title or @username. `kind`: user, bot, group (incl. supergroups),
         supergroup, channel. The second line has totals per kind for all matches, so for "how many" questions
         use limit=1 and read the numbers as given ("public"/"private" = groups/channels with/without
-        an @username).
+        an @username). `folder`: folder id or title words (see list_folders): only that folder's chats, in the
+        folder's order.
         Then one line per chat starting with its numeric id; pass that id to other tools."""
-        return await stamped(lambda _: tools.list_chats(source, budget, query=query, kind=kind, limit=limit))
+        return await stamped(
+            lambda _: tools.list_chats(source, budget, query=query, kind=kind, limit=limit, folder=folder)
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=False)
+    async def list_folders() -> str:
+        """List the user's chat folders in app order: id, title, chat count, unread chats, and what the folder
+        contains (rules and/or hand-picked chats). Use the id or title with list_chats(folder=…)."""
+        return await stamped(lambda _: tools.list_folders(source, budget))
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def get_chat_info(chat: str) -> str:
         """Details of one chat: type, description, member count, the other person's identity for private chats,
-        forum topics. `chat`: numeric id, @username, or words from the title."""
+        forum topics, the folders the chat is in. `chat`: numeric id, @username, or words from the title."""
         return await stamped(lambda _: tools.get_chat_info(source, budget, chat))
 
     @server.tool(annotations=READ_ONLY, structured_output=False)

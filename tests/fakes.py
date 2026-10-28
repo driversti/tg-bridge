@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from tg_bridge.errors import MessageNotFoundError
-from tg_bridge.source import Chat, ChatInfo, MediaFile, MediaInfo, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source import Chat, ChatInfo, Folder, MediaFile, MediaInfo, Message, MessageQuery, Person, SearchQuery
 
 
 def make_person(**overrides) -> Person:
@@ -49,6 +49,28 @@ def make_user_chat(person: Person | None = None, **overrides) -> Chat:
     return make_chat(**fields)
 
 
+def make_folder(**overrides) -> Folder:
+    fields = dict(
+        id=2,
+        title="WAR",
+        emoticon=None,
+        kind="custom",
+        contacts=False,
+        non_contacts=False,
+        groups=False,
+        broadcasts=False,
+        bots=False,
+        exclude_muted=False,
+        exclude_read=False,
+        exclude_archived=False,
+        pinned_ids=(),
+        include_ids=(),
+        exclude_ids=(),
+    )
+    fields.update(overrides)
+    return Folder(**fields)
+
+
 def make_message(**overrides) -> Message:
     fields = dict(
         id=1,
@@ -86,6 +108,7 @@ class FakeSource:
         me: Person | None = None,
         error: Exception | None = None,
         dialogs: list[Chat] | None = None,
+        folders: list[Folder] | None = None,
         infos: dict[int, ChatInfo] | None = None,
         messages: dict[int, list[Message]] | None = None,
         media: dict[tuple[int, int], tuple[MediaFile, bytes]] | None = None,
@@ -95,11 +118,13 @@ class FakeSource:
         self.error = error
         self.closed = False
         self.dialogs = list(dialogs or [])
+        self.folders = list(folders or [])
         self.infos = dict(infos or {})
         self.messages = {k: list(v) for k, v in (messages or {}).items()}
         self.message_queries: list[MessageQuery] = []
         self.search_queries: list[tuple[SearchQuery, int | None]] = []  # (query, searched chat id or None)
         self.list_dialogs_calls: list[bool] = []  # the `refresh` flag of each call
+        self.list_folders_calls: list[bool] = []
         self.media = dict(media or {})  # (chat id, message id) -> (file, content)
         self.chunk = chunk
         self.read_offsets: list[tuple[int, int]] = []  # (message_id, offset) per read_media call
@@ -117,6 +142,12 @@ class FakeSource:
         if self.error:
             raise self.error
         return list(self.dialogs)
+
+    async def list_folders(self, *, refresh: bool = False) -> list[Folder]:
+        self.list_folders_calls.append(refresh)
+        if self.error:
+            raise self.error
+        return list(self.folders)
 
     async def get_chat_info(self, chat: Chat) -> ChatInfo:
         if self.error:

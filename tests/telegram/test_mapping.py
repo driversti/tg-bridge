@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from tg_bridge.telegram.mapping import person_from_user
 
 
@@ -39,11 +41,21 @@ from datetime import UTC, datetime, timedelta, timezone  # noqa: E402
 
 from telethon.tl import types as tl  # noqa: E402
 
-from tg_bridge.telegram.mapping import chat_from_dialog, topic_from_forum_topic  # noqa: E402
+from tg_bridge.telegram.mapping import chat_from_dialog, folder_from_tl, topic_from_forum_topic  # noqa: E402
 
 
-def dialog(entity, id=1, date=datetime(2026, 10, 25, 12, 3, tzinfo=UTC), folder_id=None):
-    return SimpleNamespace(id=id, entity=entity, date=date, folder_id=folder_id)
+def dialog(entity, id=1, date=datetime(2026, 10, 25, 12, 3, tzinfo=UTC), folder_id=None, raw=None):
+    return SimpleNamespace(id=id, entity=entity, date=date, folder_id=folder_id, dialog=raw)
+
+
+def raw_dialog(mute_until=None, unread_count=0, unread_mark=False, mentions=0, reactions=0):
+    return SimpleNamespace(
+        notify_settings=SimpleNamespace(mute_until=mute_until),
+        unread_count=unread_count,
+        unread_mark=unread_mark,
+        unread_mentions_count=mentions,
+        unread_reactions_count=reactions,
+    )
 
 
 def tl_user(**kw):
@@ -411,3 +423,165 @@ def test_media_file_voice_is_ogg_and_sticker_tgs():
 def test_media_file_none_for_webpage_and_text():
     assert media_file_from_tl(tl_msg()) is None
     assert media_file_from_tl(tl_msg(media=tl.MessageMediaWebPage(webpage=tl.WebPageEmpty(id=1)))) is None
+
+
+# --- dialog state for folder rules -------------------------------------------
+
+NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+FUTURE = datetime(2026, 10, 26, tzinfo=UTC)
+PAST = datetime(2026, 10, 24, tzinfo=UTC)
+
+
+def test_user_is_contact():
+    assert chat_from_dialog(dialog(tl_user(contact=True))).peer.is_contact is True
+    assert chat_from_dialog(dialog(tl_user())).peer.is_contact is False
+
+
+def test_missing_raw_dialog_means_default_state():
+    chat = chat_from_dialog(dialog(tl_user()), now=NOW)
+
+    assert (chat.is_muted, chat.is_unread, chat.has_unread_mention) == (False, False, False)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        raw_dialog(unread_count=3),
+        raw_dialog(unread_mark=True),
+        raw_dialog(mentions=1),
+        raw_dialog(reactions=2),
+    ],
+)
+def test_is_unread_from_each_signal(raw):
+    assert chat_from_dialog(dialog(tl_user(), raw=raw), now=NOW).is_unread is True
+
+
+def test_read_dialog_is_not_unread():
+    assert chat_from_dialog(dialog(tl_user(), raw=raw_dialog()), now=NOW).is_unread is False
+
+
+def test_has_unread_mention():
+    assert chat_from_dialog(dialog(tl_user(), raw=raw_dialog(mentions=2)), now=NOW).has_unread_mention is True
+    assert chat_from_dialog(dialog(tl_user(), raw=raw_dialog(reactions=2)), now=NOW).has_unread_mention is False
+
+
+def test_muted_by_own_future_mute_until():
+    chat = chat_from_dialog(dialog(tl_user(), raw=raw_dialog(mute_until=FUTURE)), now=NOW)
+
+    assert chat.is_muted is True
+
+
+def test_expired_own_mute_until_is_not_muted():
+    chat = chat_from_dialog(dialog(tl_user(), raw=raw_dialog(mute_until=PAST)), {"users": FUTURE}, now=NOW)
+
+    assert chat.is_muted is False  # an own setting beats the account default
+
+
+@pytest.mark.parametrize(
+    "entity,category",
+    [
+        (tl_user(), "users"),
+        (tl_user(bot=True), "users"),
+        (tl.Chat(id=5, title="G", photo=tl.ChatPhotoEmpty(), participants_count=2, date=None, version=1), "chats"),
+        (tl_channel(megagroup=True), "chats"),
+        (tl_channel(broadcast=True), "broadcasts"),
+    ],
+)
+def test_default_mute_by_category(entity, category):
+    raw = raw_dialog(mute_until=None)
+    defaults = {"users": None, "chats": None, "broadcasts": None, category: FUTURE}
+
+    assert chat_from_dialog(dialog(entity, raw=raw), defaults, now=NOW).is_muted is True
+    assert chat_from_dialog(dialog(entity, raw=raw), {}, now=NOW).is_muted is False
+
+
+# --- folders ------------------------------------------------------------------
+
+
+def tl_filter(**kw):
+    return tl.DialogFilter(
+        **{
+            "id": 2,
+            "title": tl.TextWithEntities("WAR", []),
+            "pinned_peers": [],
+            "include_peers": [],
+            "exclude_peers": [],
+            **kw,
+        }
+    )
+
+
+def test_custom_folder_maps_all_fields():
+    raw = tl_filter(
+        emoticon="🪖",
+        contacts=True,
+        non_contacts=True,
+        groups=True,
+        broadcasts=True,
+        bots=True,
+        exclude_muted=True,
+        exclude_read=True,
+        exclude_archived=True,
+        pinned_peers=[tl.InputPeerUser(user_id=7, access_hash=1)],
+        include_peers=[tl.InputPeerChat(chat_id=8), tl.InputPeerChannel(channel_id=5, access_hash=1)],
+        exclude_peers=[tl.InputPeerSelf()],
+    )
+
+    folder = folder_from_tl(raw, self_id=99)
+
+    assert (folder.id, folder.title, folder.emoticon, folder.kind) == (2, "WAR", "🪖", "custom")
+    assert (folder.contacts, folder.non_contacts, folder.groups, folder.broadcasts, folder.bots) == (True,) * 5
+    assert (folder.exclude_muted, folder.exclude_read, folder.exclude_archived) == (True,) * 3
+    assert folder.pinned_ids == (7,)
+    assert folder.include_ids == (-8, -1000000000005)
+    assert folder.exclude_ids == (99,)
+
+
+def test_unset_flags_are_false():
+    folder = folder_from_tl(tl_filter(), self_id=1)
+
+    assert (folder.contacts, folder.exclude_muted, folder.emoticon) == (False, False, None)
+
+
+def test_shared_folder_has_no_rules_or_excludes():
+    raw = tl.DialogFilterChatlist(
+        id=5,
+        title=tl.TextWithEntities("F1", []),
+        pinned_peers=[],
+        include_peers=[tl.InputPeerChannel(channel_id=5, access_hash=1)],
+    )
+
+    folder = folder_from_tl(raw, self_id=1)
+
+    assert folder.kind == "shared"
+    assert (folder.contacts, folder.groups, folder.exclude_muted) == (False, False, False)
+    assert folder.include_ids == (-1000000000005,)
+    assert folder.exclude_ids == ()
+
+
+def test_default_filter_is_none():
+    assert folder_from_tl(tl.DialogFilterDefault(), self_id=1) is None
+
+
+def test_unsupported_input_peers_are_skipped():
+    raw = tl_filter(include_peers=[tl.InputPeerEmpty(), tl.InputPeerChat(chat_id=3)])
+
+    assert folder_from_tl(raw, self_id=1).include_ids == (-3,)
+
+
+def test_title_drops_custom_emoji_but_keeps_normal_one_before_it():
+    text = "🔥 F1 ⭐"
+    offset = len(text.encode("utf-16-le")) // 2 - 1  # UTF-16 units: the 🔥 takes two
+    title = tl.TextWithEntities(text, [tl.MessageEntityCustomEmoji(offset=offset, length=1, document_id=1)])
+
+    assert folder_from_tl(tl_filter(title=title), self_id=1).title == "🔥 F1"
+
+
+def test_plain_string_title_passes_through():
+    assert folder_from_tl(tl_filter(title="Plain  title"), self_id=1).title == "Plain title"
+
+
+def test_empty_title_gets_placeholder():
+    emoji_only = tl.TextWithEntities("⭐", [tl.MessageEntityCustomEmoji(offset=0, length=1, document_id=1)])
+
+    assert folder_from_tl(tl_filter(id=7, title=emoji_only), self_id=1).title == "(folder 7)"

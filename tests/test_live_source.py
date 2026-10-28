@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from tests.fakes import make_chat, make_person
+from tests.fakes import make_chat, make_folder, make_person
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
 from tg_bridge.source import ChatInfo
 from tg_bridge.source.live import LiveSource
@@ -17,6 +17,9 @@ class StubTelegram:
         self.disconnect_calls = 0
         self.dialog_calls = 0
         self.dialog_errors: list[Exception] = []
+        self.folder_calls = 0
+        self.folder_errors: list[Exception] = []
+        self.folder_title = "Folder 1"
         self.detail_calls = 0
         self.message_calls = []
 
@@ -26,6 +29,13 @@ class StubTelegram:
         if self.dialog_errors:
             raise self.dialog_errors.pop(0)
         return [make_chat(title="Secret Title")]
+
+    async def list_folders(self):
+        self.folder_calls += 1
+        await asyncio.sleep(0)
+        if self.folder_errors:
+            raise self.folder_errors.pop(0)
+        return [make_folder(title=self.folder_title)]
 
     async def get_chat_details(self, chat):
         self.detail_calls += 1
@@ -221,20 +231,21 @@ async def test_logs_have_no_titles(caplog):
 class MemoryCache:
     """DialogCache stand-in."""
 
-    def __init__(self, chats=None, saved_at=0.0, save_error: Exception | None = None):
+    def __init__(self, chats=None, saved_at=0.0, save_error: Exception | None = None, folders=None):
         self.chats, self.saved_at, self.save_error = chats, saved_at, save_error
+        self.folders = list(folders or [])
         self.saves = 0
 
     def load(self, now, max_age):
         if self.chats is None or not 0 <= now - self.saved_at < max_age:
             return None
-        return list(self.chats), self.saved_at
+        return list(self.chats), list(self.folders), self.saved_at
 
-    def save(self, chats, now):
+    def save(self, chats, folders, now):
         self.saves += 1
         if self.save_error:
             raise self.save_error
-        self.chats, self.saved_at = list(chats), now
+        self.chats, self.folders, self.saved_at = list(chats), list(folders), now
 
 
 async def test_fresh_disk_cache_skips_telegram():
@@ -277,6 +288,93 @@ async def test_cache_write_failure_does_not_fail_the_call():
     source = LiveSource(tg, dialog_cache=MemoryCache(save_error=OSError("disk full")))
 
     assert len(await source.list_dialogs()) == 1
+
+
+async def test_folders_share_the_dialog_refresh():
+    tg, clock = StubTelegram(), Clock()
+    source = LiveSource(tg, clock=clock, dialogs_ttl=300)
+
+    await source.list_dialogs()
+    folders = await source.list_folders()
+
+    assert [f.title for f in folders] == ["Folder 1"]
+    assert (tg.dialog_calls, tg.folder_calls) == (1, 1)
+
+    clock.now += 301
+    await source.list_folders()
+    await source.list_dialogs()
+
+    assert (tg.dialog_calls, tg.folder_calls) == (2, 2)
+
+
+async def test_folders_first_also_fetches_dialogs_once():
+    tg = StubTelegram()
+    source = LiveSource(tg)
+
+    await source.list_folders()
+    await source.list_dialogs()
+
+    assert (tg.dialog_calls, tg.folder_calls) == (1, 1)
+
+
+async def test_failed_refresh_keeps_old_dialogs_and_folders():
+    tg, clock = StubTelegram(), Clock()
+    source = LiveSource(tg, clock=clock, dialogs_ttl=300)
+    await source.list_dialogs()
+    tg.folder_errors = [RateLimitedError(5)]
+    tg.folder_title = "New"
+    clock.now += 301
+
+    with pytest.raises(RateLimitedError):
+        await source.list_folders()
+
+    assert [f.title for f in await source.list_folders(refresh=False)] == ["New"]  # next call retries cleanly
+    assert tg.folder_calls == 3  # fail, then retry succeeded (the first call was the initial refresh)
+
+
+async def test_failed_folder_refresh_stores_nothing_of_it():
+    tg, clock = StubTelegram(), Clock()
+    cache = MemoryCache()
+    source = LiveSource(tg, clock=clock, dialogs_ttl=300, dialog_cache=cache)
+    await source.list_dialogs()
+    old_dialogs_at = source.dialogs_age()
+    tg.folder_errors = [RateLimitedError(5)]
+    clock.now += 100
+
+    with pytest.raises(RateLimitedError):
+        await source.list_dialogs(refresh=True)
+
+    assert source.dialogs_age() == old_dialogs_at + 100  # still the old snapshot's timestamp
+    assert cache.saves == 1
+
+
+async def test_concurrent_dialogs_and_folders_fetch_once_each():
+    tg = StubTelegram()
+    source = LiveSource(tg)
+
+    await asyncio.gather(source.list_dialogs(), source.list_folders(), source.list_folders())
+
+    assert (tg.connect_calls, tg.dialog_calls, tg.folder_calls) == (1, 1, 1)
+
+
+async def test_fresh_disk_cache_serves_folders():
+    tg, clock = StubTelegram(), Clock()
+    cache = MemoryCache([make_chat()], saved_at=clock.now - 10, folders=[make_folder(title="Disk")])
+    source = LiveSource(tg, clock=clock, dialog_cache=cache)
+
+    assert [f.title for f in await source.list_folders()] == ["Disk"]
+    assert (tg.dialog_calls, tg.folder_calls) == (0, 0)
+
+
+async def test_logs_have_no_folder_titles(caplog):
+    tg = StubTelegram()
+    tg.folder_title = "Secret Folder"
+    source = LiveSource(tg)
+
+    with caplog.at_level("DEBUG"):
+        await source.list_folders()
+
+    assert "Secret Folder" not in caplog.text
 
 
 async def test_get_messages_connects_and_delegates():

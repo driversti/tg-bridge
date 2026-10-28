@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tg_bridge.source import Chat
+    from tg_bridge.source import Chat, Folder
 
 
 class TgBridgeError(Exception):
@@ -44,6 +44,24 @@ class AmbiguousChatError(TgBridgeError):
 
     def __init__(self, arg: str, candidates: list["Chat"]):
         super().__init__("chat is ambiguous")
+        self.arg = arg
+        self.candidates = candidates
+
+
+class FolderNotFoundError(TgBridgeError):
+    """No folder matches the argument. Carries all folders (there are few); the tools layer words the message."""
+
+    def __init__(self, arg: str, folders: list["Folder"]):
+        super().__init__("folder not found")  # no titles: safe if ever logged
+        self.arg = arg
+        self.folders = folders
+
+
+class AmbiguousFolderError(TgBridgeError):
+    """More than one folder matches; never guess."""
+
+    def __init__(self, arg: str, candidates: list["Folder"]):
+        super().__init__("folder is ambiguous")
         self.arg = arg
         self.candidates = candidates
 

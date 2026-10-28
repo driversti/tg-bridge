@@ -34,5 +34,6 @@ The model knows the user's chat folders and can work "per folder": list them, li
 - [ ] `list_folders` returns the same folders, in the same order, as the app's sidebar.
 - [ ] Chat count of an explicit folder matches the app.
 - [ ] A chat that sits in two folders lists both in `get_chat_info`.
-- [ ] The rule-based "Unread" folder lists the currently unread chats, and its count shrinks after reading one in the app.
+- [ ] The rule-based "Unread" folder lists the currently unread chats, and its count shrinks within 5 min (dialog cache TTL) after reading one in the app.
 - [ ] A shared folder (if any) is listed with `kind=shared`.
+- [ ] A chat muted only through the global notification defaults is left out of an `exclude_muted` folder, as in the app.

@@ -148,8 +148,9 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 
 | Tool | Purpose | Returns |
 |---|---|---|
-| `list_chats(query?, kind?, limit=30)` | Find/browse dialogs (incl. archived) | id, kind, title, @username, last message date, `deleted_peer` flag |
-| `get_chat_info(chat)` | Details of one chat | type, title, description, members count, peer identity, topics (forums) |
+| `list_chats(query?, kind?, limit=30, folder?)` | Find/browse dialogs (incl. archived); `folder` (id or title words) limits to that folder, in its order | id, kind, title, @username, last message date, `deleted_peer` flag |
+| `list_folders()` | The user's chat folders in app order | id, title, kind, chat count, unread chats, rule/explicit summary |
+| `get_chat_info(chat)` | Details of one chat | type, title, folders, description, members count, peer identity, topics (forums) |
 | `get_messages(chat, period…, topic?, around?, cursor?, limit?)` | Read a chat chronologically for a period | compact lines + `next_cursor` + `truncated` flag |
 | `search_messages(query, chat?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat or globally | compact lines with chat name + link |
 | `export_chat(chat, period…, format="md")` | Write a conversation to a Markdown file | file path, message count, date range |

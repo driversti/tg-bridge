@@ -1,29 +1,40 @@
 import json
 import stat
 
-from tests.fakes import make_chat, make_person, make_user_chat
+from tests.fakes import make_chat, make_folder, make_person, make_user_chat
 from tg_bridge.source.dialog_cache import DialogCache
 
 
 def chats():
     return [
-        make_chat(id=-1001, title="Family 🏠", username="famchat", is_forum=True),
-        make_user_chat(make_person(id=7, phone="48123", is_deleted=True), is_archived=True, last_message_at=None),
+        make_chat(
+            id=-1001, title="Family 🏠", username="famchat", is_forum=True, is_muted=True, is_unread=True, has_unread_mention=True
+        ),
+        make_user_chat(
+            make_person(id=7, phone="48123", is_deleted=True, is_contact=True), is_archived=True, last_message_at=None
+        ),
+    ]
+
+
+def folders():
+    return [
+        make_folder(id=2, title="WAR 🪖", emoticon="🪖", groups=True, exclude_read=True, pinned_ids=(7,), include_ids=(-1001, 5)),
+        make_folder(id=5, title="F1", kind="shared", exclude_ids=(9,)),
     ]
 
 
 def test_round_trip(tmp_path):
     cache = DialogCache(tmp_path / "d.json")
 
-    cache.save(chats(), now=1000.0)
+    cache.save(chats(), folders(), now=1000.0)
 
-    assert cache.load(now=1100.0, max_age=300) == (chats(), 1000.0)
+    assert cache.load(now=1100.0, max_age=300) == (chats(), folders(), 1000.0)
 
 
 def test_file_is_private(tmp_path):
     path = tmp_path / "cfg" / "d.json"
 
-    DialogCache(path).save(chats(), now=1.0)
+    DialogCache(path).save(chats(), folders(), now=1.0)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
@@ -36,14 +47,14 @@ def test_missing_file_is_a_miss(tmp_path):
 
 def test_stale_is_a_miss(tmp_path):
     cache = DialogCache(tmp_path / "d.json")
-    cache.save(chats(), now=1000.0)
+    cache.save(chats(), folders(), now=1000.0)
 
     assert cache.load(now=1301.0, max_age=300) is None
 
 
 def test_saved_in_the_future_is_a_miss(tmp_path):
     cache = DialogCache(tmp_path / "d.json")
-    cache.save(chats(), now=2000.0)
+    cache.save(chats(), folders(), now=2000.0)
 
     assert cache.load(now=1000.0, max_age=300) is None
 
@@ -58,7 +69,7 @@ def test_corrupt_file_is_a_miss(tmp_path):
 def test_other_version_is_a_miss(tmp_path):
     path = tmp_path / "d.json"
     cache = DialogCache(path)
-    cache.save(chats(), now=1.0)
+    cache.save(chats(), folders(), now=1.0)
     data = json.loads(path.read_text())
     data["version"] = 999
     path.write_text(json.dumps(data))
@@ -68,6 +79,28 @@ def test_other_version_is_a_miss(tmp_path):
 
 def test_unexpected_shape_is_a_miss(tmp_path):
     path = tmp_path / "d.json"
-    path.write_text(json.dumps({"version": 1, "saved_at": 1.0, "chats": [{"id": 1}]}))
+    path.write_text(json.dumps({"version": 2, "saved_at": 1.0, "chats": [{"id": 1}], "folders": []}))
 
     assert DialogCache(path).load(now=1.0, max_age=300) is None
+
+
+def test_version_1_file_is_a_miss(tmp_path):
+    path = tmp_path / "d.json"
+    path.write_text(json.dumps({"version": 1, "saved_at": 1.0, "chats": []}))
+
+    assert DialogCache(path).load(now=1.0, max_age=300) is None
+
+
+def test_corrupt_folder_entry_is_a_miss_with_warning(tmp_path, caplog):
+    path = tmp_path / "d.json"
+    cache = DialogCache(path)
+    cache.save(chats(), folders(), now=1.0)
+    data = json.loads(path.read_text())
+    data["folders"][0] = {"id": 2}
+    path.write_text(json.dumps(data))
+
+    with caplog.at_level("WARNING"):
+        assert cache.load(now=1.0, max_age=300) is None
+
+    assert "unreadable" in caplog.text
+    assert "🪖" not in caplog.text

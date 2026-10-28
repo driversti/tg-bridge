@@ -11,7 +11,7 @@ from tg_bridge.config import load_settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
 from tg_bridge.source import MessageQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
-from tests.telegram.test_mapping import forum_topic, tl_channel, tl_msg, tl_user, user
+from tests.telegram.test_mapping import forum_topic, tl_channel, tl_filter, tl_msg, tl_user, user
 
 
 class FakeTelethonClient:
@@ -53,11 +53,11 @@ class FakeTelethonClient:
         self.calls.append("is_user_authorized")
         return self.authorized
 
-    async def get_me(self):
+    async def get_me(self, input_peer=False):
         self.calls.append("get_me")
         if self.get_me_error:
             raise self.get_me_error
-        return self.me
+        return tl.InputPeerUser(user_id=self.me.id, access_hash=1) if input_peer else self.me
 
     async def disconnect(self):
         self.calls.append("disconnect")
@@ -196,7 +196,7 @@ def test_public_surface_is_read_only():
     public = {n for n in dir(ReadOnlyTelegram) if not n.startswith("_")}
 
     assert public == {
-        "connect", "get_me", "disconnect", "list_dialogs", "get_chat_details", "get_messages", "search",
+        "connect", "get_me", "disconnect", "list_dialogs", "list_folders", "get_chat_details", "get_messages", "search",
         "get_media_files", "read_media",
     }
 
@@ -232,22 +232,107 @@ async def test_client_identifies_as_tg_bridge(wrapper):
 ALLOWED_REQUESTS = {
     "GetFullUserRequest", "GetFullChatRequest", "GetFullChannelRequest", "GetForumTopicsRequest", "GetForumTopicsByIDRequest",
     "GetMessagesRequest", "GetFileRequest",  # download_media: messages.GetMessages / channels.GetMessages, upload.GetFile
+    "GetDialogFiltersRequest", "GetNotifySettingsRequest",  # folders: messages.GetDialogFilters, account.GetNotifySettings
 }
 
 
 def dlg(entity, id, **kw):
-    return SimpleNamespace(id=id, entity=entity, date=datetime(2026, 10, 25, 12, 3, tzinfo=UTC), folder_id=kw.get("folder_id"))
+    return SimpleNamespace(
+        id=id,
+        entity=entity,
+        date=datetime(2026, 10, 25, 12, 3, tzinfo=UTC),
+        folder_id=kw.get("folder_id"),
+        dialog=kw.get("dialog"),
+    )
+
+
+def notify(mute_until=None):
+    return tl.PeerNotifySettings(mute_until=mute_until)
 
 
 async def test_list_dialogs_includes_archived_and_ignores_migrated(wrapper):
     tg, fake = wrapper
     await tg.connect()
     fake.dialogs = [dlg(tl_user(), 1), dlg(tl_user(id=2, first_name="Bo"), 2, folder_id=1)]
+    fake.results["GetNotifySettingsRequest"] = notify()
 
     chats = await tg.list_dialogs()
 
     assert [(c.id, c.is_archived) for c in chats] == [(1, False), (2, True)]
     assert fake.iter_dialogs_kwargs == {"ignore_migrated": True}
+
+
+async def test_list_dialogs_marks_chat_muted_by_account_default(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    own_unmuted = SimpleNamespace(
+        notify_settings=notify(None), unread_count=0, unread_mark=False, unread_mentions_count=0, unread_reactions_count=0
+    )
+    fake.dialogs = [dlg(tl_user(), 1, dialog=own_unmuted), dlg(tl_channel(broadcast=True), -1000000000010, dialog=own_unmuted)]
+    far = datetime(2037, 1, 1, tzinfo=UTC)
+    # Asked in the order users, chats, broadcasts.
+    fake.result_queues["GetNotifySettingsRequest"] = [notify(None), notify(None), notify(far)]
+
+    chats = await tg.list_dialogs()
+
+    assert [c.is_muted for c in chats] == [False, True]
+    asked = [type(r.peer) for r in fake.requests if type(r).__name__ == "GetNotifySettingsRequest"]
+    assert asked == [tl.InputNotifyUsers, tl.InputNotifyChats, tl.InputNotifyBroadcasts]
+
+
+async def test_list_dialogs_survives_failing_notify_defaults(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.dialogs = [dlg(tl_user(), 1)]
+    fake.request_errors["GetNotifySettingsRequest"] = ChannelPrivateError(request=None)
+
+    chats = await tg.list_dialogs()
+
+    assert [(c.id, c.is_muted) for c in chats] == [(1, False)]
+
+
+async def test_list_folders_in_response_order_without_default(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.results["GetDialogFiltersRequest"] = tl.messages.DialogFilters(
+        filters=[tl.DialogFilterDefault(), tl_filter(id=3, title="B"), tl_filter(id=2, title="A")]
+    )
+
+    folders = await tg.list_folders()
+
+    assert [(f.id, f.title) for f in folders] == [(3, "B"), (2, "A")]
+
+
+async def test_list_folders_accepts_bare_list_and_resolves_self(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.results["GetDialogFiltersRequest"] = [tl_filter(include_peers=[tl.InputPeerSelf()])]
+
+    folders = await tg.list_folders()
+
+    assert folders[0].include_ids == (42,)
+
+
+async def test_folder_reads_use_only_allowed_requests(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.dialogs = [dlg(tl_user(), 1)]
+    fake.results["GetNotifySettingsRequest"] = notify()
+    fake.results["GetDialogFiltersRequest"] = tl.messages.DialogFilters(filters=[tl_filter()])
+
+    await tg.list_dialogs()
+    await tg.list_folders()
+
+    assert {type(r).__name__ for r in fake.requests} <= ALLOWED_REQUESTS
+
+
+async def test_list_folders_flood_becomes_rate_limited(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.request_errors["GetDialogFiltersRequest"] = FloodWaitError(request=None, capture=60)
+
+    with pytest.raises(RateLimitedError):
+        await tg.list_folders()
 
 
 async def test_list_dialogs_flood_becomes_rate_limited(wrapper):
