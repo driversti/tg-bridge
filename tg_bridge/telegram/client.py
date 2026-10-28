@@ -260,8 +260,9 @@ class ReadOnlyTelegram:
                         return SearchPage(found, None), scanned
                 if query.from_me and scanned >= GLOBAL_SCAN_CAP:
                     return SearchPage(found, SearchOffset(msg.chat_id, msg.id, msg.date)), scanned
-            # A short page or a non-slice answer is the end; asking again would repeat the same hits.
-            if last is None or len(result.messages) < want or isinstance(result, tl.messages.Messages):
+            # A non-slice answer is the end (asking again would repeat it), and so is an empty page. A short page is
+            # not: Telegram drops hidden hits from a page (Telethon's iterator makes the same call).
+            if last is None or isinstance(result, tl.messages.Messages):
                 break
             offset_rate, offset_id = int(last.date.timestamp()), last.id
             offset_peer = await self._input_entity(client, last.chat_id)

@@ -67,7 +67,7 @@ async def test_per_chat_stops_at_start_skips_end_and_stops_at_limit(wrapper):
 
 async def test_global_first_request(wrapper):
     tg, fake = await connected(wrapper)
-    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(1, 1)])]
+    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(1, 1)]), slice_([])]
     start, end = T0, T0 + timedelta(days=30)
     await tg.search(q(start=start, end=end), None)
     r = fake.requests[0]
@@ -99,12 +99,17 @@ async def test_global_pages_internally_and_maps_chat_ids(wrapper):
     assert r2.offset_peer == "input:-1000000000011"
 
 
-async def test_global_stops_on_short_page_and_non_slice(wrapper):
+async def test_global_short_page_is_not_the_end_empty_page_is(wrapper):
+    # Telegram returns short pages when it hides some hits (e.g. "not displayable due to local laws"),
+    # so only an empty page or a non-slice answer ends the search.
     tg, fake = await connected(wrapper)
-    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(1, 1)])]
+    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(3, 3)]), slice_([raw(2, 2)]), slice_([])]
     page = await tg.search(q(limit=5), None)
-    assert [m.id for m in page.messages] == [1] and len(fake.requests) == 1  # short page
-    fake.requests.clear()
+    assert [m.id for m in page.messages] == [3, 2] and len(fake.requests) == 3
+
+
+async def test_global_stops_on_non_slice(wrapper):
+    tg, fake = await connected(wrapper)
     fake.result_queues["SearchGlobalRequest"] = [tl.messages.Messages(messages=[raw(i, i) for i in range(5, 0, -1)], chats=[], users=[], topics=[])]
     page = await tg.search(q(limit=10), None)
     assert len(page.messages) == 5 and len(fake.requests) == 1  # not a slice: asking again would repeat it
@@ -145,7 +150,7 @@ async def test_flood_wait_inside_loop_is_rate_limited(wrapper):
 async def test_logs_counts_without_query_text(wrapper, caplog):
     tg, fake = await connected(wrapper)
     fake.messages = [raw(1, 1)]
-    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(1, 1)])]
+    fake.result_queues["SearchGlobalRequest"] = [slice_([raw(1, 1)]), slice_([])]
     with caplog.at_level(logging.INFO):
         await tg.search(q(text="секретнеслово"), CHAT)
         await tg.search(q(text="секретнеслово"), None)
