@@ -25,7 +25,7 @@ pre-plan future features here.
 | 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) · [plan](plans/04-export.md) | 02 | [x] |
 | 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) · [plan](plans/06-media.md) | 02 | [x] |
-| 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) | 01 | [ ] |
+| 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) · [plan](plans/07-folders.md) | 01 | [~] |
 | 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) | 07, 03 | [ ] |
 | 09 | Time awareness: "Now" line in results, `now()`, `this_week`/`last_month`/… keywords | [features/09-time-awareness.md](features/09-time-awareness.md) · [plan](plans/09-time-awareness.md) | 02 | [x] |
 
