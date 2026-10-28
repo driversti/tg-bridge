@@ -162,6 +162,19 @@ async def test_list_chats_truncates_to_max_chars(tmp_path):
     assert text.endswith("(output truncated: narrow with query/kind)")
 
 
+async def test_list_chats_header_counts_lines_actually_shown_when_truncated(tmp_path):
+    small = replace(load_settings(env=CREDS, config_file=tmp_path / "c"), max_chars=300)
+    dialogs = [make_chat(id=-i, title=f"Chat {i}") for i in range(1, 50)]
+
+    text = await tools.list_chats(FakeSource(dialogs=dialogs), small)
+
+    lines = text.splitlines()
+    chat_lines = [line for line in lines[2:] if line.startswith("-")]
+    assert lines[0] == f"Chats ({len(chat_lines)} shown of 49)"
+    assert 0 < len(chat_lines) < 30
+    assert len(text) <= 300
+
+
 async def test_list_chats_source_error_becomes_tool_error(settings):
     with pytest.raises(ToolError, match="retry in 42 s"):
         await tools.list_chats(FakeSource(error=RateLimitedError(42)), settings)

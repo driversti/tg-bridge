@@ -62,6 +62,16 @@ def render_lines(header: str, lines: list[str], max_chars: int) -> str:
     return f"{out}\n{TRUNCATED}"
 
 
+def render_counted(header: Callable[[int], str], lines: list[str], max_chars: int) -> str:
+    """render_lines whose header states how many lines made it: a "116 shown" over 102 lines makes the model
+    believe it saw everything. Fits against the header for all lines, which is never shorter than for fewer."""
+    full = render_lines(header(len(lines)), lines, max_chars)
+    if not full.endswith(TRUNCATED):
+        return full
+    shown = full.count("\n") - header(len(lines)).count("\n") - 1  # lines are one_line()d: one "\n" each
+    return "\n".join([header(shown), *lines[:shown], TRUNCATED])
+
+
 def chat_info_block(info: ChatInfo, tz: ZoneInfo, folders: Sequence[Folder] | None = None) -> str:
     """`folders`: the folders this chat is in; None leaves the line out (they could not be loaded)."""
     chat = info.chat

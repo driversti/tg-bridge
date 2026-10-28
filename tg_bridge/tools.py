@@ -46,7 +46,7 @@ from tg_bridge.format import (
     quote_query,
     render_around,
     render_hits,
-    render_lines,
+    render_counted,
     render_page,
     search_head,
     size_text,
@@ -117,13 +117,14 @@ async def list_chats(
     query: str | None = None,
     kind: str | None = None,
     limit: int = 30,
-    folder: str | None = None,
+    folder: str | int | None = None,
     min_folders: int | None = None,
 ) -> str:
     kinds = _kinds(kind)
     limit = max(MIN_LIMIT, min(MAX_LIMIT, limit))
     query = (query or "").strip() or None
-    folder = (folder or "").strip() or None
+    folder = str(folder).strip() if folder is not None else None
+    folder = folder or None
     if min_folders is not None and min_folders < 1:
         raise ToolError("min_folders must be at least 1.")
     with _tool_errors():
@@ -159,13 +160,13 @@ async def list_chats(
             matching = f' matching "{query}"' if query else ""
             return f"No chats{scope}{matching} are in {min_folders}+ folders."
     shown = chats[:limit]
-    header = f"{label} ({len(shown)} shown of {len(chats)})\n{_totals(chats)}"
+    totals = _totals(chats)
     lines = [chat_line(c, settings.timezone) for c in shown]
     if min_folders is not None:
         lines = [
             f"{line}{SEP}folders: {', '.join(one_line(f.title) for f in memberships[c.id])}" for line, c in zip(lines, shown)
         ]
-    return render_lines(header, lines, settings.max_chars)
+    return render_counted(lambda n: f"{label} ({n} shown of {len(chats)})\n{totals}", lines, settings.max_chars)
 
 
 def _resolve_folder_arg(arg: str, folders: list[Folder], chats: list[Chat], settings: Settings) -> Folder:

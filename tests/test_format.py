@@ -9,6 +9,7 @@ from tg_bridge.format import (
     chat_info_block,
     chat_line,
     not_found_text,
+    render_counted,
     render_lines,
 )
 from tg_bridge.source import ChatInfo, Topic
@@ -62,6 +63,22 @@ def test_render_lines_truncates_within_budget():
     assert text.endswith(TRUNCATED)
     assert len(text) <= 60
     assert text.count("x" * 10) < 10
+
+
+def test_render_counted_header_reports_lines_that_fit():
+    lines = ["x" * 10] * 10
+
+    text = render_counted(lambda n: f"H ({n} shown of 10)", lines, 80)
+
+    shown = text.count("x" * 10)
+    assert text.startswith(f"H ({shown} shown of 10)\n")
+    assert 0 < shown < 10
+    assert text.endswith(TRUNCATED)
+    assert len(text) <= 80
+
+
+def test_render_counted_without_truncation_shows_all():
+    assert render_counted(lambda n: f"H {n}", ["a", "b"], 100) == "H 2\na\nb"
 
 
 def test_render_lines_exact_budget_is_not_truncated():

@@ -80,6 +80,16 @@ async def test_list_chats_tool_has_folder_param(settings):
     assert "folder" in tools["list_chats"].input_schema["properties"]
 
 
+async def test_list_chats_accepts_folder_id_as_int(settings):
+    from tests.fakes import make_folder
+
+    source = FakeSource(dialogs=[make_chat(id=-1)], folders=[make_folder(id=242, title="F1", include_ids=(-1,))])
+
+    result = await build(source, settings).call_tool("list_chats", {"folder": 242})
+
+    assert 'Chats in folder "F1"' in result.content[0].text
+
+
 async def test_call_get_chat_info(settings):
     source = FakeSource(dialogs=[make_chat(id=-1, title="Family")])
 

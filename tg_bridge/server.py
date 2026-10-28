@@ -93,7 +93,7 @@ def build_server(
         query: str | None = None,
         kind: str | None = None,
         limit: int = 30,
-        folder: str | None = None,
+        folder: str | int | None = None,
         min_folders: int | None = None,
     ) -> str:
         """List the user's Telegram chats (private, groups, channels, bots, incl. archived), newest first.
