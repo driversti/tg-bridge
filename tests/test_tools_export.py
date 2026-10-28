@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -134,11 +135,17 @@ async def test_days_and_since_conflict(settings):
 
 
 async def test_result_obeys_max_chars(tmp_path):
-    env = {**CREDS, "TG_BRIDGE_EXPORT_DIR": str(tmp_path / "e"), "TG_BRIDGE_MAX_CHARS": "200"}
-    small = load_settings(env=env, config_file=tmp_path / "c")
+    env = {**CREDS, "TG_BRIDGE_EXPORT_DIR": str(tmp_path / "e")}
+    small = replace(load_settings(env=env, config_file=tmp_path / "c"), max_chars=200)
     chat = make_chat(id=-77, kind="group", title="x" * 500)
     src = FakeSource(dialogs=[chat], messages={chat.id: messages(1)})
 
     out = await tools.export_chat(src, small, "x", now=NOW)
 
     assert len(out) <= small.max_chars
+
+
+async def test_period_keyword_in_file_header(settings):
+    out = await tools.export_chat(source(3), settings, "anna", period="last_month", now=NOW)
+
+    assert out == "No messages from Anna K (-77) in this period (2026-09-01 00:00 → 2026-10-01 00:00); no file written."

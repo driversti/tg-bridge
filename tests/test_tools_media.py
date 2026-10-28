@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -159,9 +161,9 @@ async def test_oserror_uses_strerror_and_no_path(settings, monkeypatch):
 
 
 async def test_text_is_truncated_to_max_chars(tmp_path):
-    settings = load_settings(
-        env={**CREDS, "TG_BRIDGE_DOWNLOAD_DIR": str(tmp_path / "dl"), "TG_BRIDGE_MAX_CHARS": "120"},
-        config_file=tmp_path / "c",
+    settings = replace(
+        load_settings(env={**CREDS, "TG_BRIDGE_DOWNLOAD_DIR": str(tmp_path / "dl")}, config_file=tmp_path / "c"),
+        max_chars=120,
     )
     entries = [(make_media_file(i, album_id=9, size=3), b"abc") for i in range(10, 20)]
 

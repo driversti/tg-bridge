@@ -144,3 +144,12 @@ async def test_ambiguous_chat(settings):
     src = FakeSource(dialogs=[make_chat(id=-1, title="Family chat"), make_chat(id=-2, title="Family news")])
     with pytest.raises(ToolError, match="ambiguous"):
         await tools.search_messages(src, settings, "адреса", "family")
+
+
+async def test_search_period_keyword(settings):
+    src = source_with(3)
+
+    await tools.search_messages(src, settings, "адреса", "family", period="last_month", now=NOW)
+
+    q, _ = src.search_queries[0]
+    assert (q.start, q.end) == (datetime(2026, 7, 31, 22, tzinfo=UTC), datetime(2026, 8, 31, 22, tzinfo=UTC))

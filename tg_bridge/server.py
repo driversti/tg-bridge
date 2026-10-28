@@ -2,10 +2,14 @@
 
 import logging
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from tg_bridge import tools
@@ -16,6 +20,7 @@ from tg_bridge.source import MessageSource
 from tg_bridge.source.dialog_cache import DialogCache
 from tg_bridge.source.live import LiveSource
 from tg_bridge.telegram.client import ReadOnlyTelegram
+from tg_bridge.timerange import WEEKDAYS, iso_week, now_line
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +31,28 @@ WRITES_LOCAL_FILE = ToolAnnotations(
 )
 
 
-def build_server(source: MessageSource, settings: Settings) -> MCPServer:
+def _instructions(moment: datetime, tz: ZoneInfo) -> str:
+    local = moment.astimezone(tz)
+    return (
+        "Read-only access to the user's Telegram account. "
+        f"Today is {WEEKDAYS[local.weekday()]} {local:%Y-%m-%d}, {local:%H:%M} {tz.key} "
+        f"(ISO week {iso_week(local.date())}). "
+        "Your own sense of the date is out of date: for anything relative to today "
+        '("this week", "last month", "next year", ages, deadlines) use this date or call now(). '
+        "For periods prefer the `period` keywords or `days` over computing dates yourself."
+    )
+
+
+def build_server(
+    source: MessageSource,
+    settings: Settings,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> MCPServer:
+    tz = settings.timezone
+    # The "Now:" line and its newline count towards the output budget, so the tools get what is left.
+    budget = replace(settings, max_chars=settings.max_chars - len(now_line(now(), tz)) - 1)
+
     @asynccontextmanager
     async def lifespan(_: MCPServer) -> AsyncIterator[None]:
         try:
@@ -34,12 +60,33 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         finally:
             await source.close()
 
-    server = MCPServer("tg-bridge", lifespan=lifespan)
+    server = MCPServer("tg-bridge", instructions=_instructions(now(), tz), lifespan=lifespan)
+
+    async def stamped(call: Callable[[datetime], Awaitable[str]]) -> str:
+        # One clock reading per call: the line and the period maths must agree. Errors get the date too.
+        moment = now()
+        line = now_line(moment, tz)
+        try:
+            return f"{line}\n{await call(moment)}"
+        except ToolError as e:
+            raise ToolError(f"{line}\n{e}") from e
+
+    # Registered as "now": the function name would shadow the clock parameter.
+    @server.tool(name="now", annotations=READ_ONLY, structured_output=False)
+    async def now_tool() -> str:
+        """Current date, weekday, time, time zone and ISO week, plus this/last week, month and year as dates.
+        Call it first when the question depends on today ("today", "this week", "last month", "next year",
+        how long ago): never guess the date. Every other tool's result also starts with a "Now:" line."""
+
+        async def body(moment: datetime) -> str:
+            return tools.now(budget, moment)
+
+        return await stamped(body)
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def whoami() -> str:
         """Return the Telegram account this bridge is logged in as: name, @username and numeric id."""
-        return await tools.whoami(source)
+        return await stamped(lambda _: tools.whoami(source))
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def list_chats(query: str | None = None, kind: str | None = None, limit: int = 30) -> str:
@@ -49,13 +96,13 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         use limit=1 and read the numbers as given ("public"/"private" = groups/channels with/without
         an @username).
         Then one line per chat starting with its numeric id; pass that id to other tools."""
-        return await tools.list_chats(source, settings, query=query, kind=kind, limit=limit)
+        return await stamped(lambda _: tools.list_chats(source, budget, query=query, kind=kind, limit=limit))
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def get_chat_info(chat: str) -> str:
         """Details of one chat: type, description, member count, the other person's identity for private chats,
         forum topics. `chat`: numeric id, @username, or words from the title."""
-        return await tools.get_chat_info(source, settings, chat)
+        return await stamped(lambda _: tools.get_chat_info(source, budget, chat))
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def get_messages(
@@ -63,6 +110,7 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         days: int | None = None,
         since: str | None = None,
         until: str | None = None,
+        period: str | None = None,
         topic: str | int | None = None,
         from_me: bool = False,
         cursor: str | None = None,
@@ -71,17 +119,21 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
     ) -> str:
         """Read one chat's messages in time order, as compact lines grouped by day.
         `chat`: numeric id, @username, or words from the title.
-        Period: `days` (1 = today, 2 = since yesterday 00:00, …) OR `since`/`until` (YYYY-MM-DD, "YYYY-MM-DD HH:MM",
-        "today", "yesterday"; `until` dates include that whole day). No period = the latest messages.
+        Period: `period` = today, yesterday, this_week, last_week, this_month, last_month, this_year or last_year;
+        OR `days` (1 = today, 2 = since yesterday 00:00, …); OR `since`/`until` (YYYY-MM-DD, "YYYY-MM-DD HH:MM" or a
+        keyword; `until` dates include that whole day). Prefer `period` or `days` over computing dates yourself.
+        No period = the latest messages.
         `topic`: forum topic id or title words (see get_chat_info). `from_me`: only messages the user sent.
         If the result ends with "Next: call get_messages(...)", more messages exist: make exactly that call, copying
         chat and cursor character for character (other arguments come from the cursor). To read a whole period,
         keep calling until the result ends with "End of period."
         `around`: a message #id (e.g. from search_messages): shows the messages just before and after it;
         period, topic and from_me are then ignored."""
-        return await tools.get_messages(
-            source, settings, chat, days=days, since=since, until=until, topic=topic, from_me=from_me,
-            cursor=cursor, around=around, limit=limit,
+        return await stamped(
+            lambda m: tools.get_messages(
+                source, budget, chat, days=days, since=since, until=until, period=period, topic=topic,
+                from_me=from_me, cursor=cursor, around=around, limit=limit, now=lambda: m,
+            )
         )
 
     @server.tool(annotations=READ_ONLY, structured_output=False)
@@ -91,6 +143,7 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         days: int | None = None,
         since: str | None = None,
         until: str | None = None,
+        period: str | None = None,
         from_me: bool = False,
         cursor: str | None = None,
         limit: int = 30,
@@ -100,12 +153,14 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         Telegram matches whole words and word starts, NOT meaning: if nothing useful comes back, search again with
         other word forms, synonyms, and the other languages people use in that chat (e.g. Ukrainian, Russian,
         Polish, English). One query per call; prefer 1–2 distinctive words.
-        Period: `days` OR `since`/`until`, as in get_messages. `from_me`: only messages the user sent.
+        Period: `period` (this_week, last_month, … as in get_messages) OR `days` OR `since`/`until`. `from_me`: only messages the user sent.
         To see the conversation around a hit: get_messages(chat=<chat id>, around=<#id>).
         If the result ends with "Next: call search_messages(...)", copy that call exactly to get older hits."""
-        return await tools.search_messages(
-            source, settings, query, chat, days=days, since=since, until=until, from_me=from_me, cursor=cursor,
-            limit=limit,
+        return await stamped(
+            lambda m: tools.search_messages(
+                source, budget, query, chat, days=days, since=since, until=until, period=period, from_me=from_me,
+                cursor=cursor, limit=limit, now=lambda: m,
+            )
         )
 
     @server.tool(annotations=WRITES_LOCAL_FILE, structured_output=False)
@@ -114,17 +169,21 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         days: int | None = None,
         since: str | None = None,
         until: str | None = None,
+        period: str | None = None,
         format: str = "md",
         resume: bool = False,
     ) -> str:
         """Save a chat (or a period of it) to a Markdown file and return only the file path, message count and date
         range, NOT the messages. Use it when the user wants a file, a full copy, or a whole long conversation for
         another tool or model. Without a period it exports the whole history. `chat`: id, @username or title words.
-        Period: `days` OR `since`/`until`, as in get_messages.
+        Period: `period` (this_week, last_month, … as in get_messages) OR `days` OR `since`/`until`.
         One call works for about 40 seconds. If the result says "Next: call export_chat(chat=..., resume=true)", make
         exactly that call, and repeat until the result no longer says so: every call adds to the same file."""
-        return await tools.export_chat(
-            source, settings, chat, days=days, since=since, until=until, format=format, resume=resume
+        return await stamped(
+            lambda m: tools.export_chat(
+                source, budget, chat, days=days, since=since, until=until, period=period, format=format,
+                resume=resume, now=lambda: m,
+            )
         )
 
     @server.tool(annotations=WRITES_LOCAL_FILE, structured_output=False)
@@ -134,7 +193,7 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         `message_id`: the #id from get_messages or search_messages. A message in an album downloads the whole album.
         One call works for about 40 seconds: if the result says "Next: call download_media(...)", make exactly that
         call until it no longer says so."""
-        return await tools.download_media(source, settings, chat, message_id)
+        return await stamped(lambda _: tools.download_media(source, budget, chat, message_id))
 
     return server
 

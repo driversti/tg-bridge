@@ -73,7 +73,7 @@ even before login. `whoami` then tells you to run step 2.
 | `TG_API_ID`, `TG_API_HASH` | — | Telegram app credentials |
 | `TG_BRIDGE_SESSION` | `~/.config/tg-bridge/tg-bridge.session` | Session file |
 | `TG_BRIDGE_TZ` | `Europe/Warsaw` | Time zone for periods/output |
-| `TG_BRIDGE_MAX_CHARS` | `12000` | Per-tool-call output budget |
+| `TG_BRIDGE_MAX_CHARS` | `12000` | Per-tool-call output budget, including the `Now:` line (minimum 500) |
 | `TG_BRIDGE_EXPORT_DIR` | `~/tg-bridge-data/exports` | Markdown exports |
 | `TG_BRIDGE_DOWNLOAD_DIR` | `~/tg-bridge-data/downloads` | Downloaded media |
 | `TG_BRIDGE_MAX_DOWNLOAD_MB` | `200` | Largest file download_media fetches (MB) |

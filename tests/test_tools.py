@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -151,7 +153,7 @@ async def test_list_chats_empty_match(settings):
 
 
 async def test_list_chats_truncates_to_max_chars(tmp_path):
-    small = load_settings(env={**CREDS, "TG_BRIDGE_MAX_CHARS": "200"}, config_file=tmp_path / "c")
+    small = replace(load_settings(env=CREDS, config_file=tmp_path / "c"), max_chars=200)
     dialogs = [make_chat(id=-i, title=f"Chat {i}") for i in range(1, 50)]
 
     text = await tools.list_chats(FakeSource(dialogs=dialogs), small)
@@ -469,7 +471,7 @@ async def test_rate_limited_is_readable(settings):
 @pytest.mark.parametrize("max_chars", [300, 2000, 12000])
 @pytest.mark.parametrize("period", [{"days": 3}, {}])
 async def test_output_never_exceeds_budget(tmp_path, max_chars, period):
-    small = load_settings(env={**CREDS, "TG_BRIDGE_MAX_CHARS": str(max_chars)}, config_file=tmp_path / "c")
+    small = replace(load_settings(env=CREDS, config_file=tmp_path / "c"), max_chars=max_chars)
     source = reader(messages={GROUP.id: history()})
     first = source.messages[GROUP.id][0]  # a huge message at the start of the forward read
     source.messages[GROUP.id][0] = make_message(id=1, chat_id=GROUP.id, date=first.date, text="x" * 1400)
@@ -478,3 +480,24 @@ async def test_output_never_exceeds_budget(tmp_path, max_chars, period):
 
     assert len(text) <= max_chars
     assert shown_ids(text)
+
+
+async def test_get_messages_period_keyword(settings):
+    source = reader()
+
+    await read(source, settings, period="last_week")
+
+    q = source.message_queries[0]
+    assert (q.start, q.end) == (datetime(2026, 10, 18, 22, tzinfo=UTC), datetime(2026, 10, 25, 23, tzinfo=UTC))
+
+
+async def test_period_and_days_is_tool_error(settings):
+    with pytest.raises(ToolError, match="Use one of `period`"):
+        await read(reader(), settings, period="today", days=2)
+
+
+def test_now_tool_body(settings):
+    out = tools.now(settings, datetime(2026, 10, 28, 13, 3, tzinfo=UTC))
+
+    assert out.splitlines()[0] == "Today: Wednesday 2026-10-28 · ISO week 2026-W44 · UTC+01:00"
+    assert len(out.splitlines()) == 5

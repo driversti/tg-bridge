@@ -79,10 +79,16 @@ def test_invalid_timezone_raises(tmp_path):
         load_settings(env={**CREDS, "TG_BRIDGE_TZ": "Mars/Base"}, config_file=tmp_path / "c.env")
 
 
-@pytest.mark.parametrize("value", ["0", "-5", "lots"])
-def test_non_positive_max_chars_raises(tmp_path, value):
+@pytest.mark.parametrize("value", ["0", "-5", "lots", "499"])
+def test_max_chars_below_500_rejected(tmp_path, value):
     with pytest.raises(ConfigError, match="TG_BRIDGE_MAX_CHARS"):
         load_settings(env={**CREDS, "TG_BRIDGE_MAX_CHARS": value}, config_file=tmp_path / "c.env")
+
+
+def test_max_chars_500_accepted(tmp_path):
+    settings = load_settings(env={**CREDS, "TG_BRIDGE_MAX_CHARS": "500"}, config_file=tmp_path / "c.env")
+
+    assert settings.max_chars == 500
 
 
 def test_max_download_mb_default_is_200_mib(tmp_path):

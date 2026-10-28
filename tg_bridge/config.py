@@ -13,6 +13,9 @@ from tg_bridge.errors import ConfigError
 
 log = logging.getLogger(__name__)
 
+# Floor so the "Now:" line reserve can never leave a tool a zero or negative budget.
+MIN_MAX_CHARS = 500
+
 DEFAULTS = {
     "TG_BRIDGE_SESSION": "~/.config/tg-bridge/tg-bridge.session",
     "TG_BRIDGE_TZ": "Europe/Warsaw",
@@ -67,8 +70,8 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
         raise ConfigError("TG_BRIDGE_TZ is not a known time zone") from None
 
     max_chars_raw = values["TG_BRIDGE_MAX_CHARS"].strip()
-    if not (max_chars_raw.isascii() and max_chars_raw.isdigit()) or int(max_chars_raw) <= 0:
-        raise ConfigError("TG_BRIDGE_MAX_CHARS must be a positive integer")
+    if not (max_chars_raw.isascii() and max_chars_raw.isdigit()) or int(max_chars_raw) < MIN_MAX_CHARS:
+        raise ConfigError(f"TG_BRIDGE_MAX_CHARS must be an integer of at least {MIN_MAX_CHARS}")
 
     max_mb_raw = values["TG_BRIDGE_MAX_DOWNLOAD_MB"].strip()
     if not (max_mb_raw.isascii() and max_mb_raw.isdigit()) or int(max_mb_raw) <= 0:

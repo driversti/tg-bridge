@@ -48,7 +48,7 @@ from tg_bridge.format import (
 from tg_bridge.media import DownloadResult, SavedFile, download_message_media, safe_mime
 from tg_bridge.resolve import match_chats, normalize, resolve_chat
 from tg_bridge.source import Chat, Message, MessageQuery, MessageSource, SearchOffset, SearchQuery, Topic
-from tg_bridge.timerange import Period, describe_period, parse_period
+from tg_bridge.timerange import Period, describe_period, now_details, parse_period
 
 KINDS = ("user", "bot", "group", "supergroup", "channel")
 MIN_LIMIT, MAX_LIMIT = 1, 200
@@ -67,6 +67,10 @@ def _tool_errors() -> Iterator[None]:
     except TgBridgeError as e:
         # Anticipated failures reach the model as readable text; anything else stays a generic crash.
         raise ToolError(str(e)) from e
+
+
+def now(settings: Settings, moment: datetime) -> str:
+    return now_details(moment, settings.timezone)
 
 
 async def whoami(source: MessageSource) -> str:
@@ -168,6 +172,7 @@ async def get_messages(
     days: int | None = None,
     since: str | None = None,
     until: str | None = None,
+    period: str | None = None,
     topic: str | int | None = None,
     from_me: bool = False,
     cursor: str | None = None,
@@ -190,7 +195,7 @@ async def get_messages(
             direction, period, boundary_id, from_me = c.direction, Period(c.start, c.end), c.boundary_id, c.from_me
             topic_obj = None if c.topic_id is None else Topic(c.topic_id, "", False)
         else:
-            period = parse_period(days, since, until, tz, now())
+            period = parse_period(days, since, until, tz, now(), period)
             topic_obj = await _resolve_topic(source, resolved, topic)
             # Period reads start at the beginning and move forward; "latest" reads move back from the end.
             direction = "forward" if period.start is not None else "backward"
@@ -303,6 +308,7 @@ async def search_messages(
     days: int | None = None,
     since: str | None = None,
     until: str | None = None,
+    period: str | None = None,
     from_me: bool = False,
     cursor: str | None = None,
     limit: int = 30,
@@ -328,7 +334,7 @@ async def search_messages(
                 raise CursorError(other_chat=True, tool="search_messages")
             period, from_me = Period(parsed.start, parsed.end), parsed.from_me
         else:
-            period = parse_period(days, since, until, tz, now())
+            period = parse_period(days, since, until, tz, now(), period)
         sq = SearchQuery(
             text=query,
             start=period.start,
@@ -377,6 +383,7 @@ async def export_chat(
     days: int | None = None,
     since: str | None = None,
     until: str | None = None,
+    period: str | None = None,
     format: str = "md",
     resume: bool = False,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -390,7 +397,7 @@ async def export_chat(
     moment = now()
     with _tool_errors():
         # No period = the whole history, unlike get_messages. A resumed export keeps the period it started with.
-        period = Period(None, None) if resume else parse_period(days, since, until, tz, moment)
+        period = Period(None, None) if resume else parse_period(days, since, until, tz, moment, period)
         info = await source.get_chat_info(resolved)
         result = await export_chat_file(
             source, info, period, settings.export_dir, tz, moment, resume=resume, sleep=sleep, clock=clock
