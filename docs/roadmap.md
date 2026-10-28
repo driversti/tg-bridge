@@ -24,7 +24,7 @@ pre-plan future features here.
 | 03 | Search: `search_messages` | [features/03-search.md](features/03-search.md) · [plan](plans/03-search.md) | 02 | [x] |
 | 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) · [plan](plans/04-export.md) | 02 | [x] |
 | 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
-| 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) | 02 | [ ] |
+| 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) · [plan](plans/06-media.md) | 02 | [~] |
 
 Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from LM Studio.
 
