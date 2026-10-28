@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 from tg_bridge.errors import PeriodError
 
 MAX_DAYS = 3650
-KEYWORDS = ("today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_year", "last_year")
+KEYWORDS = (
+    "today", "yesterday", "this_week", "previous_week", "this_month", "previous_month", "this_year", "previous_year",
+)
+# Not documented: "last month" in a question usually means the last 30 days, and models mapped it to `last_month`
+# (smoke 08). Still parsed, for older calls.
+ALIASES = {"last_week": "previous_week", "last_month": "previous_month", "last_year": "previous_year"}
 # Fixed English names: strftime("%a"/"%B") would follow the process locale.
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTHS = (
@@ -109,6 +114,7 @@ def _bad(name: str) -> PeriodError:
 def _keyword(raw: str) -> str | None:
     # Small models write "this week" or "Last-Month".
     normalized = raw.strip().casefold().replace(" ", "_").replace("-", "_")
+    normalized = ALIASES.get(normalized, normalized)
     return normalized if normalized in KEYWORDS else None
 
 
@@ -123,11 +129,11 @@ def _keyword_days(keyword: str, today: date) -> tuple[date, date]:
         "today": (today, today + timedelta(days=1)),
         "yesterday": (today - timedelta(days=1), today),
         "this_week": (monday, monday + timedelta(days=7)),
-        "last_week": (monday - timedelta(days=7), monday),
+        "previous_week": (monday - timedelta(days=7), monday),
         "this_month": (month, next_month),
-        "last_month": (prev_month, month),
+        "previous_month": (prev_month, month),
         "this_year": (year, year.replace(year=year.year + 1)),
-        "last_year": (year.replace(year=year.year - 1), year),
+        "previous_year": (year.replace(year=year.year - 1), year),
     }[keyword]
 
 
@@ -149,18 +155,18 @@ def now_details(now: datetime, tz: ZoneInfo) -> str:
     sign = "+" if minutes >= 0 else "-"
     utc_offset = f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
     week_start, week_end = _keyword_days("this_week", today)
-    last_start, _ = _keyword_days("last_week", today)
+    last_start, _ = _keyword_days("previous_week", today)
     this_month, _ = _keyword_days("this_month", today)
-    last_month, _ = _keyword_days("last_month", today)
+    last_month, _ = _keyword_days("previous_month", today)
     last_end = week_start - timedelta(days=1)
     return "\n".join(
         (
             f"Today: {WEEKDAYS[today.weekday()]} {today.isoformat()} · ISO week {iso_week(today)} · {utc_offset}",
             f"This week: {week_start} Mon → {week_end - timedelta(days=1)} Sun"
-            f" · last week: {last_start} → {last_end}",
+            f" · previous week: {last_start} → {last_end}",
             f"This month: {this_month:%Y-%m} ({MONTHS[this_month.month - 1]})"
-            f" · last month: {last_month:%Y-%m} ({MONTHS[last_month.month - 1]})",
-            f"This year: {today.year} · last year: {today.year - 1} · next year: {today.year + 1}",
+            f" · previous month: {last_month:%Y-%m} ({MONTHS[last_month.month - 1]})",
+            f"This year: {today.year} · previous year: {today.year - 1} · next year: {today.year + 1}",
             f"Period keywords: {', '.join(KEYWORDS)}",
         )
     )

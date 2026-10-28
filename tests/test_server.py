@@ -245,3 +245,14 @@ async def test_instructions_contain_today(settings):
     instructions = build(FakeSource(), settings).instructions
 
     assert "2026-10-28" in instructions and "Wednesday" in instructions and "now()" in instructions
+
+
+async def test_rolling_periods_map_to_days(settings):
+    # Smoke 08: for "last 7 days" the model picked calendar last_week and missed this week's posts.
+    tools = {t.name: t for t in await build(FakeSource(), settings).list_tools()}
+
+    for name in ("get_messages", "search_messages", "export_chat"):
+        description = " ".join(tools[name].description.split())
+        assert '"last 7 days" or "past week" → days=7' in description
+        assert "previous calendar week" in description
+        assert "previous_month" in description and "last_month" not in description

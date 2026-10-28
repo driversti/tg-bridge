@@ -10,7 +10,7 @@ The local model often doesn't know today's date (it guesses from its training cu
 - **`now()` tool:** date, weekday, time, time zone, ISO week. Its description tells the model to call it first when a question depends on "today", "this week", "next year", etc.
 - **Server `instructions`** (MCP initialize) include the current date. LM Studio restarts the server per message (see Log, 01), so it stays fresh. Builder checks whether LM Studio actually shows instructions to the model and notes the result in the Log.
 - **More period keywords** in `timerange` (all Europe/Warsaw, weeks start Monday):
-  `this_week`, `last_week`, `this_month`, `last_month`, `this_year`. Each works as `since` and also as a whole-period shorthand (`period="this_week"`) for every tool that takes period args. The error message lists all keywords.
+  `this_week`, `previous_week`, `this_month`, `previous_month`, `this_year`, `previous_year` (`last_*` accepted as undocumented aliases since 08's smoke test). Each works as `since` and also as a whole-period shorthand (`period="this_week"`) for every tool that takes period args. The error message lists all keywords.
 - Tool descriptions say: "prefer `days`/keywords over computing dates yourself".
 
 ## Out of scope

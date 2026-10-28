@@ -192,12 +192,12 @@ def test_period_with_days_or_since_rejected(kwargs):
 
 
 def test_unknown_period_lists_keywords():
-    with pytest.raises(PeriodError, match="last_year"):
+    with pytest.raises(PeriodError, match="previous_year"):
         parse(period="next_week")
 
 
 def test_bad_since_lists_keywords():
-    with pytest.raises(PeriodError, match="this_week.*last_year"):
+    with pytest.raises(PeriodError, match="this_week.*previous_year"):
         parse(since="garbage")
 
 
@@ -225,10 +225,11 @@ def test_now_line_ignores_locale():
 def test_now_details_exact():
     assert now_details(utc(2026, 10, 28, 13, 3), W) == (
         "Today: Wednesday 2026-10-28 · ISO week 2026-W44 · UTC+01:00\n"
-        "This week: 2026-10-26 Mon → 2026-11-01 Sun · last week: 2026-10-19 → 2026-10-25\n"
-        "This month: 2026-10 (October) · last month: 2026-09 (September)\n"
-        "This year: 2026 · last year: 2025 · next year: 2027\n"
-        "Period keywords: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year"
+        "This week: 2026-10-26 Mon → 2026-11-01 Sun · previous week: 2026-10-19 → 2026-10-25\n"
+        "This month: 2026-10 (October) · previous month: 2026-09 (September)\n"
+        "This year: 2026 · previous year: 2025 · next year: 2027\n"
+        "Period keywords: today, yesterday, this_week, previous_week, this_month, previous_month, this_year, "
+        "previous_year"
     )
 
 
@@ -238,3 +239,11 @@ def test_now_details_summer_offset():
 
 def test_iso_week_year_boundary():
     assert iso_week(date(2027, 1, 1)) == "2026-W53"
+
+
+@pytest.mark.parametrize("old, new", [("last_week", "previous_week"), ("last_month", "previous_month"), ("last_year", "previous_year")])
+def test_last_keywords_are_hidden_aliases_of_previous(old, new):
+    # Smoke 08: "за останній місяць" (= the last 30 days) made the model pick `last_month`, a calendar month.
+    # The documented names are previous_*; last_* still parse for old calls and cursors.
+    assert parse(period=old, now=WED) == parse(period=new, now=WED)
+    assert parse(since=old, now=WED) == parse(since=new, now=WED)

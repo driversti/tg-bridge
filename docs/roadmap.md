@@ -56,5 +56,6 @@ _(deviations from design, one line each)_
 - 07: `list_chats` gained `min_folders` (smoke: asked for chats in 2+ folders, the model started calling `get_chat_info` on all 888 chats instead of intersecting per-folder lists).
 - 08: channels rewrite news instead of forwarding it, so whole-text overlap missed every real repost (smoke: 0 of 104 merged). Repost grouping also matches headlines (overlap ≥ 0.85, ≥ 4 tokens, ≤ 6 h apart); F1 × 7 days: 2 merges, no false ones.
 - 08: F1 (4 channels) × 7 days = 179 posts → 102 headlines, 2 pages, 1.2–4.5 s per call; folder search 1.5 s. Telethon `wait_time=0` for reads/searches ≤ 3000 messages (it slept 1 s per history page).
-- 08: smoke follow-ups: for "last 7 days" the model picks calendar `last_week`, and it does not fill `Links: …/<id>` into post links.
+- 08: smoke follow-up open: the model does not fill `Links: …/<id>` into post links.
 - 09: LM Studio does not pass the MCP server `instructions` to the model (smoke 2026-10-28: asked without tools, it answered "[current date]" and could not quote them), so the date reaches the model only via the `Now:` line and `now()`. Also beyond the brief: `last_year` keyword, `TG_BRIDGE_MAX_CHARS` ≥ 500.
+- 09 (after 08's smoke): for "last 7 days"/"останній місяць" the model picked calendar `last_week`/`last_month`. Keywords are documented as `previous_week/month/year` (`last_*` kept as hidden aliases) and docstrings map rolling periods to `days`; recheck: days=7, days=30 (once after a first previous_month try), "минулого тижня" → previous_week.

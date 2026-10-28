@@ -39,7 +39,8 @@ def _instructions(moment: datetime, tz: ZoneInfo) -> str:
         f"(ISO week {iso_week(local.date())}). "
         "Your own sense of the date is out of date: for anything relative to today "
         '("this week", "last month", "next year", ages, deadlines) use this date or call now(). '
-        "For periods prefer the `period` keywords or `days` over computing dates yourself."
+        "For periods prefer the `period` keywords or `days` over computing dates yourself; "
+        '"last 7 days" or "past week" is days=7, while previous_week is the previous calendar week.'
     )
 
 
@@ -141,9 +142,12 @@ def build_server(
         name from list_folders) in time order, as compact lines grouped by day.
         `mode="headlines"`: one short line per post, the same news from several chats merged into one "×N" line; best
         for "what's new in <folder>" questions. Needs a period. Folder reads always need a period.
-        Period: `period` = today, yesterday, this_week, last_week, this_month, last_month, this_year or last_year;
-        OR `days` (1 = today, 2 = since yesterday 00:00, …); OR `since`/`until` (YYYY-MM-DD, "YYYY-MM-DD HH:MM" or a
-        keyword; `until` dates include that whole day). Prefer `period` or `days` over computing dates yourself.
+        Period: `period` = today, yesterday, this_week, previous_week, this_month, previous_month, this_year or
+        previous_year; OR `days` (1 = today, 2 = since yesterday 00:00, …); OR `since`/`until` (YYYY-MM-DD,
+        "YYYY-MM-DD HH:MM" or a keyword; `until` dates include that whole day). Prefer `period` or `days` over computing dates yourself.
+        "The last/past N days/week/month", counted back from now, is `days`: "last 7 days" or "past week" → days=7,
+        "the last month" or "past 30 days" → days=30. previous_week/previous_month are only the previous calendar
+        week/month (Mon–Sun, 1st–end): use them only when the user means that.
         No period = the latest messages.
         `topic`: forum topic id or title words (see get_chat_info). `from_me`: only messages the user sent.
         If the result ends with "Next: call get_messages(...)", more messages exist: make exactly that call, copying
@@ -177,7 +181,11 @@ def build_server(
         Telegram matches whole words and word starts, NOT meaning: if nothing useful comes back, search again with
         other word forms, synonyms, and the other languages people use in that chat (e.g. Ukrainian, Russian,
         Polish, English). One query per call; prefer 1–2 distinctive words.
-        Period: `period` (this_week, last_month, … as in get_messages) OR `days` OR `since`/`until`. `from_me`: only messages the user sent.
+        Period: `period` (this_week, previous_month, … as in get_messages) OR `days` OR `since`/`until`.
+        "The last/past N days/week/month", counted back from now, is `days`: "last 7 days" or "past week" → days=7,
+        "the last month" or "past 30 days" → days=30. previous_week/previous_month are only the previous calendar
+        week/month (Mon–Sun, 1st–end): use them only when the user means that.
+        `from_me`: only messages the user sent.
         To see the conversation around a hit: get_messages(chat=<chat id>, around=<#id>).
         If the result ends with "Next: call search_messages(...)", copy that call exactly to get older hits."""
         return await stamped(
@@ -200,7 +208,10 @@ def build_server(
         """Save a chat (or a period of it) to a Markdown file and return only the file path, message count and date
         range, NOT the messages. Use it when the user wants a file, a full copy, or a whole long conversation for
         another tool or model. Without a period it exports the whole history. `chat`: id, @username or title words.
-        Period: `period` (this_week, last_month, … as in get_messages) OR `days` OR `since`/`until`.
+        Period: `period` (this_week, previous_month, … as in get_messages) OR `days` OR `since`/`until`.
+        "The last/past N days/week/month", counted back from now, is `days`: "last 7 days" or "past week" → days=7,
+        "the last month" or "past 30 days" → days=30. previous_week/previous_month are only the previous calendar
+        week/month (Mon–Sun, 1st–end): use them only when the user means that.
         One call works for about 40 seconds. If the result says "Next: call export_chat(chat=..., resume=true)", make
         exactly that call, and repeat until the result no longer says so: every call adds to the same file."""
         return await stamped(
