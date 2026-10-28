@@ -4,9 +4,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tests.fakes import FakeSource, make_chat, make_message
+from tests.fakes import FakeSource, make_chat, make_message, make_person
 from tg_bridge import export
-from tg_bridge.errors import RateLimitedError
+from tg_bridge.errors import ExportFileError, RateLimitedError
 from tg_bridge.export import ExportResult, export_chat_file
 from tg_bridge.source import ChatInfo
 from tg_bridge.timerange import Period
@@ -186,3 +186,86 @@ async def test_logs_no_title_or_path(tmp_path, caplog):
     assert caplog.records
     text = caplog.text.casefold()
     assert "chess" not in text and "private-dir-name" not in text and "text 1" not in text
+
+
+# --- time limit and continuation ----------------------------------------------
+
+
+
+class Clock:
+    """Each call is `step` seconds after the previous one."""
+
+    def __init__(self, step):
+        self.step, self.now = step, -step
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
+
+
+def plain_msgs(n):
+    # No @username: whether it repeats after a pause is not what these tests are about.
+    return [m.__class__(**{**m.__dict__, "sender": make_person(username=None)}) for m in msgs(n)]
+
+
+async def run_chunk(src, dest, resume=None, step=25, now=NOW):
+    return await export_chat_file(src, INFO, Period(None, None), dest, W, now, resume=resume, sleep=Sleeps(), clock=Clock(step))
+
+
+async def test_pauses_at_the_time_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FakeSource(messages={CHAT.id: plain_msgs(5)})
+
+    result = await run_chunk(src, tmp_path)  # 25 s per page: the second page crosses 40 s
+
+    assert (result.count, result.paused, result.stopped) == (4, True, None)
+    c = result.cursor
+    assert (c.chat_id, c.boundary_id, c.count, c.file_n) == (CHAT.id, 4, 4, 1)
+    assert (c.first, c.last, c.file_stamp) == (T0 + timedelta(hours=1), T0 + timedelta(hours=4), NOW)
+    assert result.path.read_text(encoding="utf-8").endswith("· INCOMPLETE: paused, to be continued\n")
+
+
+async def test_continuation_appends_to_the_same_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FakeSource(messages={CHAT.id: plain_msgs(9)})
+    whole = await run_chunk(src, tmp_path / "whole", step=0)
+
+    result = await run_chunk(src, tmp_path / "parts")
+    while result.paused:
+        result = await run_chunk(src, tmp_path / "parts", resume=result.cursor, now=NOW + timedelta(minutes=5))
+
+    assert (result.count, result.first, result.last, result.cursor) == (9, whole.first, whole.last, None)
+    assert [p.name for p in (tmp_path / "parts").iterdir()] == [whole.path.name]
+    assert result.path.read_text(encoding="utf-8") == whole.path.read_text(encoding="utf-8")
+
+
+async def test_long_flood_wait_gives_a_cursor(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FlakySource(RateLimitedError(900), fail_on=2, messages={CHAT.id: plain_msgs(4)})
+
+    result = await run_chunk(src, tmp_path, step=0)
+
+    assert result.stopped == "Telegram rate limit: retry in 900 s" and not result.paused
+    assert (result.cursor.boundary_id, result.cursor.count) == (2, 2)
+
+
+async def test_continuation_of_a_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FakeSource(messages={CHAT.id: plain_msgs(5)})
+    result = await run_chunk(src, tmp_path)
+    result.path.unlink()
+
+    with pytest.raises(ExportFileError, match="^The file of this export is gone"):
+        await run_chunk(src, tmp_path, resume=result.cursor)
+
+
+async def test_continuation_of_a_complete_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FakeSource(messages={CHAT.id: plain_msgs(5)})
+    paused = await run_chunk(src, tmp_path)
+    done = await run_chunk(src, tmp_path, resume=paused.cursor, step=0)
+    before = done.path.read_text(encoding="utf-8")
+
+    with pytest.raises(ExportFileError, match="^This export is already complete"):
+        await run_chunk(src, tmp_path, resume=paused.cursor)
+    assert done.path.read_text(encoding="utf-8") == before

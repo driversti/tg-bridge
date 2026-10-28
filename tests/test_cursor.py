@@ -2,7 +2,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tg_bridge.cursor import Cursor, decode_cursor, encode_cursor
+from tg_bridge.cursor import (
+    Cursor,
+    ExportCursor,
+    decode_cursor,
+    decode_export_cursor,
+    encode_cursor,
+    encode_export_cursor,
+)
 from tg_bridge.errors import CursorError
 
 START = datetime(2026, 10, 25, 23, 0, tzinfo=UTC)
@@ -127,3 +134,55 @@ def test_search_cursor_garbage(token):
 
 def test_get_messages_cursor_error_text_unchanged():
     assert str(CursorError()) == "Invalid cursor. Call get_messages again without cursor."
+
+
+# --- export cursor -----------------------------------------------------------
+
+
+STAMP = datetime(2026, 10, 28, 13, 24, 41, tzinfo=UTC)
+FIRST = datetime(2025, 9, 27, 8, 58, tzinfo=UTC)
+LAST = datetime(2025, 10, 5, 19, 7, 30, tzinfo=UTC)
+
+
+def export_cursor(**overrides) -> ExportCursor:
+    fields = dict(
+        chat_id=CHAT, file_stamp=STAMP, file_n=2, boundary_id=19645, start=START, end=END, count=5500, first=FIRST,
+        last=LAST,
+    )
+    fields.update(overrides)
+    return ExportCursor(**fields)
+
+
+def test_export_round_trip():
+    c = export_cursor()
+
+    token = encode_export_cursor(c)
+
+    assert token == (
+        f"x19645_f{int(STAMP.timestamp())}_n2_k5500_a{int(FIRST.timestamp())}_d{int(LAST.timestamp())}"
+        f"_s{int(START.timestamp())}_e{int(END.timestamp())}_c795"
+    )
+    assert decode_export_cursor(token, CHAT) == c
+
+
+def test_export_round_trip_whole_history_first_file():
+    c = export_cursor(start=None, end=None, file_n=1)
+
+    token = encode_export_cursor(c)
+
+    assert "_n" not in token and "_s" not in token and "_e" not in token
+    assert decode_export_cursor(token, CHAT) == c
+
+
+def test_export_cursor_from_another_chat():
+    with pytest.raises(CursorError, match="another chat.*call export_chat again without cursor"):
+        decode_export_cursor(encode_export_cursor(export_cursor()), -100111)
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "x1_c795", "f1_f2_k1_a1_d1_c795", "x1_f2_k1_a1_c795", "x1_f2_k1_a1_d1_d2_c795", f"{'x1_f2_k1_a1_d1_c795'}_q1"],
+)
+def test_export_cursor_malformed(token):
+    with pytest.raises(CursorError, match="Invalid cursor. Call export_chat again without cursor."):
+        decode_export_cursor(token, CHAT)

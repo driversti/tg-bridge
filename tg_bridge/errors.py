@@ -71,3 +71,7 @@ class CursorError(TgBridgeError):
             super().__init__(f"Invalid cursor. Call {tool} again without cursor.")
         self.other_chat = other_chat
         self.other_query = other_query
+
+
+class ExportFileError(TgBridgeError):
+    """An export cursor points at a file that is gone or already finished."""

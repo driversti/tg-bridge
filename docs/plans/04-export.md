@@ -178,3 +178,10 @@ Maintainer's choices (2026-10-28): **no period = the whole history**; **compact 
 - [ ] **Step 4:** Run `uv run pytest -q`; expect all PASS.
 - [ ] **Step 5:** Add to the brief's smoke checklist: `[ ] Export of the largest chat finishes within LM Studio's tool timeout (note the duration and message count in the Log).` and `[ ] A forum/supergroup export has working t.me links.`
 - [ ] **Step 6:** Commit `feat: export_chat tool (feature 04)`.
+
+## Addendum (2026-10-28, after the first smoke run)
+
+- LM Studio ends a tool call after ~60 s (`MCP error -32001: Request timed out`); a whole-history export of a busy channel got ~5 500 messages in and was cut (`INCOMPLETE: interrupted`). Maintainer's choice: **one file, continued by cursor**.
+- `EXPORT_TIME_BUDGET = 40` s per call: after a full page past that, the call pauses (footer `INCOMPLETE: paused, to be continued`) and returns `Next: call export_chat(chat="<id>", cursor="x…")`. The model repeats until the result has no `Next:`.
+- Export cursor (`cursor.py`): `x{boundary}_f{file epoch}[_n{suffix}]_k{count}_a{first}_d{last}[_s][_e]_c{tag}`. The continuation finds the file by chat id + creation stamp, cuts the footer and appends; a missing or complete file → `ExportFileError`. A FloodWait stop also returns this cursor instead of a `since=` hint.
+- Message `#id` and reply `↩#id` are t.me links where the chat has them; `export_chat` is annotated not read-only (it writes a local file).

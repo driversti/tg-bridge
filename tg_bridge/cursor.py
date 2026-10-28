@@ -145,3 +145,65 @@ def decode_search_cursor(s: str, query: str) -> SearchCursor:
         end=_moment(fields.get("e")),
         from_me="m" in fields,
     )
+
+
+# Export cursor: `x{boundary_id}_f{epoch}[_n{n}]_k{count}_a{epoch}_d{epoch}[_s{epoch}][_e{epoch}]_c{tag}`.
+# One export call has a time limit; the cursor continues it into the same file. `f`/`n` name that file (its creation
+# time and name suffix), `k`/`a`/`d` carry the count and first/last dates so far for the footer and day headings.
+_EXPORT_HEAD = re.compile(r"x(\d+)")
+_EXPORT_FIELD = re.compile(r"([fnkadsec])(\d+)")
+
+
+@dataclass(frozen=True)
+class ExportCursor:
+    chat_id: int
+    file_stamp: datetime  # when the file was created, to the second; part of its name
+    file_n: int  # the file name's suffix, 1 = none
+    boundary_id: int  # continue with ids > it
+    start: datetime | None
+    end: datetime | None
+    count: int  # messages written so far
+    first: datetime
+    last: datetime
+
+
+def encode_export_cursor(c: ExportCursor) -> str:
+    parts = [f"x{c.boundary_id}", f"f{int(c.file_stamp.timestamp())}"]
+    if c.file_n > 1:
+        parts.append(f"n{c.file_n}")
+    parts += [f"k{c.count}", f"a{int(c.first.timestamp())}", f"d{int(c.last.timestamp())}"]
+    if c.start is not None:
+        parts.append(f"s{int(c.start.timestamp())}")
+    if c.end is not None:
+        parts.append(f"e{int(c.end.timestamp())}")
+    parts.append(f"c{_tag(c.chat_id)}")
+    return "_".join(parts)
+
+
+def decode_export_cursor(s: str, chat_id: int) -> ExportCursor:
+    """Parse an export token for `chat_id`; CursorError if it is malformed or was issued for another chat."""
+    invalid = CursorError(tool="export_chat")
+    head, *rest = s.strip().strip("\"'`").strip().split("_")
+    if not (m := _EXPORT_HEAD.fullmatch(head)):
+        raise invalid
+    fields: dict[str, str] = {}
+    for part in rest:
+        f = _EXPORT_FIELD.fullmatch(part)
+        if f is None or f.group(1) in fields:
+            raise invalid
+        fields[f.group(1)] = f.group(2)
+    if any(key not in fields for key in "fkadc") or len(fields["c"]) != 3:
+        raise invalid
+    if fields["c"] != _tag(chat_id):
+        raise CursorError(other_chat=True, tool="export_chat")
+    return ExportCursor(
+        chat_id=chat_id,
+        file_stamp=_moment(fields["f"]),
+        file_n=int(fields.get("n", "1")),
+        boundary_id=int(m.group(1)),
+        start=_moment(fields.get("s")),
+        end=_moment(fields.get("e")),
+        count=int(fields["k"]),
+        first=_moment(fields["a"]),
+        last=_moment(fields["d"]),
+    )

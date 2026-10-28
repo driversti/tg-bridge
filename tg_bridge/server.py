@@ -115,12 +115,18 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
         since: str | None = None,
         until: str | None = None,
         format: str = "md",
+        cursor: str | None = None,
     ) -> str:
         """Save a chat (or a period of it) to a Markdown file and return only the file path, message count and date
         range, NOT the messages. Use it when the user wants a file, a full copy, or a whole long conversation for
         another tool or model. Without a period it exports the whole history. `chat`: id, @username or title words.
-        Period: `days` OR `since`/`until`, as in get_messages. Large chats can take minutes."""
-        return await tools.export_chat(source, settings, chat, days=days, since=since, until=until, format=format)
+        Period: `days` OR `since`/`until`, as in get_messages.
+        One call works for about 40 seconds. If the result says "Next: call export_chat(...)", make that call with
+        chat and cursor character for character, and repeat until the result no longer says so: every call adds to
+        the same file."""
+        return await tools.export_chat(
+            source, settings, chat, days=days, since=since, until=until, format=format, cursor=cursor
+        )
 
     return server
 

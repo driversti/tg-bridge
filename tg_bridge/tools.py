@@ -1,9 +1,10 @@
 """MCP tool bodies: thin, plain-text, Telethon-free."""
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -13,8 +14,10 @@ from tg_bridge.cursor import (
     Cursor,
     SearchCursor,
     decode_cursor,
+    decode_export_cursor,
     decode_search_cursor,
     encode_cursor,
+    encode_export_cursor,
     encode_search_cursor,
 )
 from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError, CursorError, TgBridgeError
@@ -366,8 +369,10 @@ async def export_chat(
     since: str | None = None,
     until: str | None = None,
     format: str = "md",
+    cursor: str | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> str:
     if format.strip().casefold() != "md":
         raise ToolError('Only format="md" is supported.')
@@ -375,9 +380,16 @@ async def export_chat(
     tz = settings.timezone
     moment = now()
     with _tool_errors():
-        period = parse_period(days, since, until, tz, moment)  # no period = the whole history, unlike get_messages
+        resume = None
+        if cursor is not None and cursor.strip():
+            resume = decode_export_cursor(cursor, resolved.id)  # the period comes from the cursor
+            period = Period(resume.start, resume.end)
+        else:
+            period = parse_period(days, since, until, tz, moment)  # no period = the whole history, unlike get_messages
         info = await source.get_chat_info(resolved)
-    result = await export_chat_file(source, info, period, settings.export_dir, tz, moment, sleep=sleep)
+        result = await export_chat_file(
+            source, info, period, settings.export_dir, tz, moment, resume=resume, sleep=sleep, clock=clock
+        )
     who = f"{one_line(resolved.title)} ({resolved.id})"
     if result.path is None and result.stopped is not None:
         # Stopped before the first page: saying "no messages" would be wrong.
@@ -391,21 +403,19 @@ async def export_chat(
 
 def _export_text(result: ExportResult, who: str, chat_id: int, period: Period, tz: ZoneInfo) -> str:
     noun = "message" if result.count == 1 else "messages"
-    lines = [f"Exported {result.count} {noun} from {who} to:", str(result.path)]
+    so_far = " so far" if result.paused else ""
+    lines = [f"Exported {result.count} {noun}{so_far} from {who} to:", str(result.path)]
     first, last = result.first, result.last
-    if result.stopped is None:
-        lines.append(
-            f"Range: {when_text(first, tz)} → {when_text(last, tz)} ({tz.key}). "
-            "The file has the full text; it was not read into this conversation."
-        )
-        return "\n".join(lines)
-    # Resume one second after the last exported message (Telegram dates have second resolution).
-    resume = (last + timedelta(seconds=1)).astimezone(tz).strftime("%Y-%m-%dT%H:%M:%S")
-    call = f'export_chat(chat="{chat_id}", since="{resume}"'
-    if period.end is not None:
-        call += f', until="{period.end.astimezone(tz).strftime("%Y-%m-%dT%H:%M:%S")}"'
-    lines.append(
-        f"Stopped early: {one_line(result.stopped)}. The file ends at {when_text(last, tz)}. "
-        f"To get the rest later, call {call})."
+    span = f"{when_text(first, tz)} → {when_text(last, tz)} ({tz.key})"
+    call = (
+        f'export_chat(chat="{chat_id}", cursor="{encode_export_cursor(result.cursor)}")' if result.cursor else None
     )
+    if result.paused:
+        # Spelled out, as for get_messages: models stop early when a footer only hints at more.
+        lines.append(f"So far: {span}. Not finished: one call has a time limit. Next: call {call}")
+    elif result.stopped is not None:
+        hint = f" To continue this file later, call {call}." if call else ""
+        lines.append(f"Stopped early: {one_line(result.stopped)}. The file ends at {when_text(last, tz)}.{hint}")
+    else:
+        lines.append(f"Range: {span}. The file has the full text; it was not read into this conversation.")
     return "\n".join(lines)

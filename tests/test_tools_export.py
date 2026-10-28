@@ -56,7 +56,7 @@ async def test_empty_period_writes_no_file(settings):
     assert not settings.export_dir.exists()
 
 
-async def test_stopped_text_has_resume_hint(settings, monkeypatch):
+async def test_stopped_text_has_cursor(settings, monkeypatch):
     monkeypatch.setattr(export, "EXPORT_PAGE", 2)
     src = source(4, FlakySource, error=RateLimitedError(900), fail_on=2)
 
@@ -64,10 +64,46 @@ async def test_stopped_text_has_resume_hint(settings, monkeypatch):
 
     lines = out.split("\n")
     assert lines[0] == "Exported 2 messages from Anna K (-77) to:"
-    assert lines[2] == (
+    assert lines[2].startswith(
         "Stopped early: Telegram rate limit: retry in 900 s. The file ends at 2026-10-01 14:00. "
-        'To get the rest later, call export_chat(chat="-77", since="2026-10-01T14:00:01").'
+        'To continue this file later, call export_chat(chat="-77", cursor="x2_f'
     )
+
+
+class Clock:
+    def __init__(self, step):
+        self.step, self.now = step, -step
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
+
+
+async def test_paused_export_continues_with_the_cursor(settings, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = source(5)
+
+    out = await tools.export_chat(src, settings, "anna", now=NOW, clock=Clock(25))
+
+    lines = out.split("\n")
+    assert lines[0] == "Exported 4 messages so far from Anna K (-77) to:"
+    assert lines[2].startswith(
+        "So far: 2026-10-01 13:00 → 2026-10-01 16:00 (Europe/Warsaw). Not finished: one call has a time limit. "
+        'Next: call export_chat(chat="-77", cursor="x4_f'
+    )
+    token = lines[2].split('cursor="')[1].rstrip('")')
+
+    out = await tools.export_chat(src, settings, "anna", days=1, cursor=token, now=NOW, clock=Clock(25))
+
+    first, path, rng = out.split("\n")
+    assert first == "Exported 5 messages from Anna K (-77) to:"  # the whole file; `days` is ignored with a cursor
+    assert path == lines[1]
+    assert rng.startswith("Range: 2026-10-01 13:00 → 2026-10-01 17:00 (Europe/Warsaw).")
+
+
+async def test_cursor_from_another_chat(settings):
+    with pytest.raises(ToolError, match="another chat"):
+        await tools.export_chat(source(1), settings, "anna", cursor="x4_f1_k4_a1_d1_c000", now=NOW)
 
 
 async def test_stopped_before_first_page_is_an_error_not_empty(settings):
@@ -76,15 +112,6 @@ async def test_stopped_before_first_page_is_an_error_not_empty(settings):
     with pytest.raises(ToolError, match="^Could not export: Telegram rate limit: retry in 900 s. No file written.$"):
         await tools.export_chat(src, settings, "anna", now=NOW, sleep=Sleeps())
     assert not settings.export_dir.exists()
-
-
-async def test_stopped_hint_repeats_until(settings, monkeypatch):
-    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
-    src = source(4, FlakySource, error=RateLimitedError(900), fail_on=2)
-
-    out = await tools.export_chat(src, settings, "anna", until="2026-10-31", now=NOW, sleep=Sleeps())
-
-    assert 'since="2026-10-01T14:00:01", until="2026-11-01T00:00:00").' in out
 
 
 async def test_only_md_format(settings):

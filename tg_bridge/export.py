@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import TextIO
 from zoneinfo import ZoneInfo
 
-from tg_bridge.errors import RateLimitedError, TgBridgeError
+from tg_bridge.cursor import ExportCursor
+from tg_bridge.errors import ExportFileError, RateLimitedError, TgBridgeError
 from tg_bridge.format import SEP, WEEKDAYS, chat_link_base, duration_text, one_line, size_text
 from tg_bridge.resolve import normalize
 from tg_bridge.source import Chat, ChatInfo, MediaInfo, Message, MessageQuery, MessageSource, Person
@@ -25,6 +26,10 @@ EXPORT_PAGE = 500
 # Telethon already sleeps through FloodWaits up to 30 s; beyond MAX_FLOOD_WAIT we stop rather than hang the tool call.
 MAX_FLOOD_WAIT = 300
 MAX_FLOOD_RETRIES = 3
+# LM Studio gives up on a tool call after ~60 s; a call pauses after this many seconds and returns a cursor instead.
+EXPORT_TIME_BUDGET = 40.0
+PAUSED = "paused, to be continued"
+_FOOTER_TAIL = 4096  # bytes; the footer is one short line
 MAX_NAME_SUFFIX = 99
 # Every control character but \n and \t (line breaks are normalised before this runs).
 _STRIP = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -198,13 +203,17 @@ def render_footer(
 @dataclass(frozen=True)
 class ExportResult:
     path: Path | None  # None: no messages, so no file
-    count: int
+    count: int  # in the whole file, earlier calls included
     first: datetime | None  # aware UTC
     last: datetime | None
-    stopped: str | None  # None = complete
+    stopped: str | None  # why it ended early; None = complete or paused
+    paused: bool = False  # hit the time limit of one call
+    cursor: ExportCursor | None = None  # continues this file; set when paused or stopped
 
 
-def _create_file(dest_dir: Path, chat: Chat, period: Period, first: datetime, tz: ZoneInfo, now: datetime) -> tuple[Path, TextIO]:
+def _create_file(
+    dest_dir: Path, chat: Chat, period: Period, first: datetime, tz: ZoneInfo, now: datetime
+) -> tuple[Path, int, TextIO]:
     """Never overwrites: O_EXCL, and a numeric suffix when the name is taken (two exports within one second)."""
     dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     for n in range(1, MAX_NAME_SUFFIX + 1):
@@ -213,8 +222,28 @@ def _create_file(dest_dir: Path, chat: Chat, period: Period, first: datetime, tz
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             continue
-        return path, os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        return path, n, os.fdopen(fd, "w", encoding="utf-8", newline="\n")
     raise FileExistsError(f"no free export file name after {MAX_NAME_SUFFIX} tries")
+
+
+def _reopen_file(dest_dir: Path, chat: Chat, resume: ExportCursor, tz: ZoneInfo) -> tuple[Path, TextIO]:
+    """Finds the file a cursor continues, cuts its footer off and opens it for appending."""
+    suffix = f"_{resume.file_n}" if resume.file_n > 1 else ""
+    pattern = f"*_{chat.id}_*_{resume.file_stamp.astimezone(tz):%Y%m%d-%H%M%S}{suffix}.md"
+    matches = list(dest_dir.glob(pattern)) if dest_dir.is_dir() else []
+    if len(matches) != 1:
+        raise ExportFileError("The file of this export is gone. Call export_chat again without cursor.")
+    path = matches[0]
+    with open(path, "r+b") as f:
+        size = f.seek(0, os.SEEK_END)
+        f.seek(max(0, size - _FOOTER_TAIL))
+        tail = f.read()
+        # Chat text never yields a bare "---" line (escape_block), so this is the footer.
+        cut = tail.rfind(b"\n---\n")
+        if cut < 0 or tail.rstrip().endswith(b" complete"):
+            raise ExportFileError("This export is already complete; its file has every message.")
+        f.truncate(size - len(tail) + cut + 1)
+    return path, os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND), "w", encoding="utf-8", newline="\n")
 
 
 async def export_chat_file(
@@ -225,20 +254,31 @@ async def export_chat_file(
     tz: ZoneInfo,
     now: datetime,
     *,
+    resume: ExportCursor | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> ExportResult:
-    """Pages through the chat oldest first and appends each page to a new Markdown file in `dest_dir`.
+    """Pages through the chat oldest first and appends each page to a new Markdown file in `dest_dir`, or, with
+    `resume`, to the file an earlier call paused. After EXPORT_TIME_BUDGET seconds it pauses with a cursor.
     A rate limit or other bridge error mid-way ends the file with an INCOMPLETE footer and is reported in the result;
     anything else also leaves that footer but propagates."""
     chat = info.chat
     state = RenderState()
-    started = time.monotonic()
+    started, budget_start = time.monotonic(), clock()
     out: TextIO | None = None
     path: Path | None = None
+    file_n = 1
+    file_stamp = now.replace(microsecond=0)
     count = pages = retries = 0
     first = last = None
     stopped: str | None = None
+    paused = False
     boundary: int | None = None
+    if resume is not None:
+        path, out = _reopen_file(dest_dir, chat, resume, tz)
+        file_n, file_stamp, boundary = resume.file_n, resume.file_stamp, resume.boundary_id
+        count, first, last = resume.count, resume.first, resume.last
+        state.day = last.astimezone(tz).date()
     try:
         while True:
             query = MessageQuery("forward", period.start, period.end, boundary, None, False, EXPORT_PAGE)
@@ -258,7 +298,7 @@ async def export_chat_file(
             if not page:
                 break
             if out is None:  # the file only exists once there is something to put in it
-                path, out = _create_file(dest_dir, chat, period, page[0].date, tz, now)
+                path, file_n, out = _create_file(dest_dir, chat, period, page[0].date, tz, now)
                 out.write(render_header(info, period, tz, now))
             out.write(render_messages(page, chat, tz, state))
             out.flush()
@@ -268,8 +308,11 @@ async def export_chat_file(
             boundary = page[-1].id
             if len(page) < EXPORT_PAGE:
                 break
+            if clock() - budget_start >= EXPORT_TIME_BUDGET:
+                paused = True
+                break
         if out is not None:
-            out.write(render_footer(count, first, last, tz, stopped))
+            out.write(render_footer(count, first, last, tz, PAUSED if paused else stopped))
     except BaseException:
         if out is not None:
             out.write(render_footer(count, first, last, tz, "interrupted"))
@@ -280,6 +323,10 @@ async def export_chat_file(
     # Chat id and counts only: the path holds the chat title.
     log.info(
         "export chat=%s messages=%d pages=%d seconds=%.1f %s",
-        chat.id, count, pages, time.monotonic() - started, "complete" if stopped is None else "stopped",
+        chat.id, count, pages, time.monotonic() - started,
+        "paused" if paused else "complete" if stopped is None else "stopped",
     )
-    return ExportResult(path, count, first, last, stopped)
+    cursor = None
+    if (paused or stopped is not None) and boundary is not None and first is not None and last is not None:
+        cursor = ExportCursor(chat.id, file_stamp, file_n, boundary, period.start, period.end, count, first, last)
+    return ExportResult(path, count, first, last, stopped, paused, cursor)
