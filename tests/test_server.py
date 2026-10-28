@@ -84,6 +84,6 @@ async def test_export_chat_registered_as_local_file_writer(settings):
     t = tools["export_chat"]
     a = t.annotations
     assert (a.read_only_hint, a.destructive_hint, a.idempotent_hint, a.open_world_hint) == (False, False, False, False)
-    assert set(t.input_schema["properties"]) == {"chat", "days", "since", "until", "format", "cursor"}
+    assert set(t.input_schema["properties"]) == {"chat", "days", "since", "until", "format", "resume"}
     assert t.input_schema["required"] == ["chat"]
     assert "NOT the messages" in t.description

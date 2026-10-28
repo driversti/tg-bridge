@@ -163,7 +163,7 @@ async def test_long_flood_wait_stops_with_partial_file(tmp_path, monkeypatch):
     assert (result.count, result.last) == (2, T0 + timedelta(hours=2))
     body = result.path.read_text(encoding="utf-8")
     assert "text 2" in body and "text 3" not in body
-    assert body.endswith("· INCOMPLETE: Telegram rate limit: retry in 900 s\n")
+    assert "· INCOMPLETE: Telegram rate limit: retry in 900 s\n<!-- tg-bridge resume: x2_" in body
 
 
 async def test_unexpected_error_writes_footer_and_reraises(tmp_path, monkeypatch):
@@ -174,7 +174,7 @@ async def test_unexpected_error_writes_footer_and_reraises(tmp_path, monkeypatch
         await run(src, tmp_path)
 
     (written,) = tmp_path.iterdir()
-    assert written.read_text(encoding="utf-8").endswith("· INCOMPLETE: interrupted\n")
+    assert "· INCOMPLETE: interrupted\n<!-- tg-bridge resume: x2_" in written.read_text(encoding="utf-8")
 
 
 async def test_logs_no_title_or_path(tmp_path, caplog):
@@ -208,7 +208,7 @@ def plain_msgs(n):
     return [m.__class__(**{**m.__dict__, "sender": make_person(username=None)}) for m in msgs(n)]
 
 
-async def run_chunk(src, dest, resume=None, step=25, now=NOW):
+async def run_chunk(src, dest, resume=False, step=25, now=NOW):
     return await export_chat_file(src, INFO, Period(None, None), dest, W, now, resume=resume, sleep=Sleeps(), clock=Clock(step))
 
 
@@ -219,53 +219,81 @@ async def test_pauses_at_the_time_limit(tmp_path, monkeypatch):
     result = await run_chunk(src, tmp_path)  # 25 s per page: the second page crosses 40 s
 
     assert (result.count, result.paused, result.stopped) == (4, True, None)
-    c = result.cursor
-    assert (c.chat_id, c.boundary_id, c.count, c.file_n) == (CHAT.id, 4, 4, 1)
-    assert (c.first, c.last, c.file_stamp) == (T0 + timedelta(hours=1), T0 + timedelta(hours=4), NOW)
-    assert result.path.read_text(encoding="utf-8").endswith("· INCOMPLETE: paused, to be continued\n")
+    tail = result.path.read_text(encoding="utf-8").split("\n---\n")[-1]
+    assert tail.startswith("Exported 4 messages · ") and "· INCOMPLETE: paused, to be continued\n" in tail
+    assert tail.endswith(" -->\n") and "<!-- tg-bridge resume: x4_" in tail
 
 
-async def test_continuation_appends_to_the_same_file(tmp_path, monkeypatch):
+async def test_resume_appends_to_the_same_file(tmp_path, monkeypatch):
     monkeypatch.setattr(export, "EXPORT_PAGE", 2)
     src = FakeSource(messages={CHAT.id: plain_msgs(9)})
     whole = await run_chunk(src, tmp_path / "whole", step=0)
 
     result = await run_chunk(src, tmp_path / "parts")
     while result.paused:
-        result = await run_chunk(src, tmp_path / "parts", resume=result.cursor, now=NOW + timedelta(minutes=5))
+        result = await run_chunk(src, tmp_path / "parts", resume=True, now=NOW + timedelta(minutes=5))
 
-    assert (result.count, result.first, result.last, result.cursor) == (9, whole.first, whole.last, None)
+    assert (result.count, result.first, result.last) == (9, whole.first, whole.last)
     assert [p.name for p in (tmp_path / "parts").iterdir()] == [whole.path.name]
     assert result.path.read_text(encoding="utf-8") == whole.path.read_text(encoding="utf-8")
 
 
-async def test_long_flood_wait_gives_a_cursor(tmp_path, monkeypatch):
+async def test_resume_keeps_the_period(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FakeSource(messages={CHAT.id: plain_msgs(9)})
+    period = Period(T0 + timedelta(hours=2), T0 + timedelta(hours=8))  # messages 2..7
+    await export_chat_file(src, INFO, period, tmp_path, W, NOW, sleep=Sleeps(), clock=Clock(25))
+
+    result = await run_chunk(src, tmp_path, resume=True, step=0)
+
+    assert result.count == 6 and result.last == T0 + timedelta(hours=7)
+
+
+async def test_long_flood_wait_can_be_resumed(tmp_path, monkeypatch):
     monkeypatch.setattr(export, "EXPORT_PAGE", 2)
     src = FlakySource(RateLimitedError(900), fail_on=2, messages={CHAT.id: plain_msgs(4)})
+    stopped = await run_chunk(src, tmp_path, step=0)
 
-    result = await run_chunk(src, tmp_path, step=0)
+    result = await run_chunk(src, tmp_path, resume=True, step=0)
 
-    assert result.stopped == "Telegram rate limit: retry in 900 s" and not result.paused
-    assert (result.cursor.boundary_id, result.cursor.count) == (2, 2)
+    assert stopped.stopped == "Telegram rate limit: retry in 900 s"
+    assert (result.count, result.stopped, result.path) == (4, None, stopped.path)
 
 
-async def test_continuation_of_a_missing_file(tmp_path, monkeypatch):
+async def test_interrupted_export_can_be_resumed(tmp_path, monkeypatch):
+    # LM Studio's timeout cancels the call: what was written must not be lost.
     monkeypatch.setattr(export, "EXPORT_PAGE", 2)
-    src = FakeSource(messages={CHAT.id: plain_msgs(5)})
-    result = await run_chunk(src, tmp_path)
-    result.path.unlink()
+    src = FlakySource(RuntimeError("cancelled"), fail_on=2, messages={CHAT.id: plain_msgs(4)})
+    with pytest.raises(RuntimeError):
+        await run_chunk(src, tmp_path, step=0)
 
-    with pytest.raises(ExportFileError, match="^The file of this export is gone"):
-        await run_chunk(src, tmp_path, resume=result.cursor)
+    result = await run_chunk(src, tmp_path, resume=True, step=0)
+
+    assert result.count == 4 and result.stopped is None
 
 
-async def test_continuation_of_a_complete_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
-    src = FakeSource(messages={CHAT.id: plain_msgs(5)})
-    paused = await run_chunk(src, tmp_path)
-    done = await run_chunk(src, tmp_path, resume=paused.cursor, step=0)
+async def test_nothing_to_resume(tmp_path):
+    with pytest.raises(ExportFileError, match="^No unfinished export of this chat"):
+        await run_chunk(FakeSource(messages={CHAT.id: plain_msgs(1)}), tmp_path, resume=True)
+
+
+async def test_latest_export_already_complete(tmp_path):
+    src = FakeSource(messages={CHAT.id: plain_msgs(3)})
+    done = await run_chunk(src, tmp_path, step=0)
     before = done.path.read_text(encoding="utf-8")
 
-    with pytest.raises(ExportFileError, match="^This export is already complete"):
-        await run_chunk(src, tmp_path, resume=paused.cursor)
+    with pytest.raises(ExportFileError, match=f"^The latest export of this chat is already complete: {done.path}$"):
+        await run_chunk(src, tmp_path, resume=True)
     assert done.path.read_text(encoding="utf-8") == before
+
+
+async def test_resume_ignores_other_chats_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    other = make_chat(kind="group", id=-55, title="Secret Chess Club")
+    await export_chat_file(
+        FakeSource(messages={other.id: plain_msgs(5)}), ChatInfo(other, None, None, (), None), Period(None, None),
+        tmp_path, W, NOW, sleep=Sleeps(), clock=Clock(25),
+    )
+
+    with pytest.raises(ExportFileError, match="^No unfinished export of this chat"):
+        await run_chunk(FakeSource(messages={CHAT.id: plain_msgs(5)}), tmp_path, resume=True)

@@ -14,10 +14,8 @@ from tg_bridge.cursor import (
     Cursor,
     SearchCursor,
     decode_cursor,
-    decode_export_cursor,
     decode_search_cursor,
     encode_cursor,
-    encode_export_cursor,
     encode_search_cursor,
 )
 from tg_bridge.errors import AmbiguousChatError, ChatNotFoundError, CursorError, TgBridgeError
@@ -369,7 +367,7 @@ async def export_chat(
     since: str | None = None,
     until: str | None = None,
     format: str = "md",
-    cursor: str | None = None,
+    resume: bool = False,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -380,12 +378,8 @@ async def export_chat(
     tz = settings.timezone
     moment = now()
     with _tool_errors():
-        resume = None
-        if cursor is not None and cursor.strip():
-            resume = decode_export_cursor(cursor, resolved.id)  # the period comes from the cursor
-            period = Period(resume.start, resume.end)
-        else:
-            period = parse_period(days, since, until, tz, moment)  # no period = the whole history, unlike get_messages
+        # No period = the whole history, unlike get_messages. A resumed export keeps the period it started with.
+        period = Period(None, None) if resume else parse_period(days, since, until, tz, moment)
         info = await source.get_chat_info(resolved)
         result = await export_chat_file(
             source, info, period, settings.export_dir, tz, moment, resume=resume, sleep=sleep, clock=clock
@@ -407,15 +401,15 @@ def _export_text(result: ExportResult, who: str, chat_id: int, period: Period, t
     lines = [f"Exported {result.count} {noun}{so_far} from {who} to:", str(result.path)]
     first, last = result.first, result.last
     span = f"{when_text(first, tz)} → {when_text(last, tz)} ({tz.key})"
-    call = (
-        f'export_chat(chat="{chat_id}", cursor="{encode_export_cursor(result.cursor)}")' if result.cursor else None
-    )
+    call = f'export_chat(chat="{chat_id}", resume=true)'
     if result.paused:
         # Spelled out, as for get_messages: models stop early when a footer only hints at more.
         lines.append(f"So far: {span}. Not finished: one call has a time limit. Next: call {call}")
     elif result.stopped is not None:
-        hint = f" To continue this file later, call {call}." if call else ""
-        lines.append(f"Stopped early: {one_line(result.stopped)}. The file ends at {when_text(last, tz)}.{hint}")
+        lines.append(
+            f"Stopped early: {one_line(result.stopped)}. The file ends at {when_text(last, tz)}. "
+            f"To continue this file later, call {call}."
+        )
     else:
         lines.append(f"Range: {span}. The file has the full text; it was not read into this conversation.")
     return "\n".join(lines)

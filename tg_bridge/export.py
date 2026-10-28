@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import TextIO
 from zoneinfo import ZoneInfo
 
-from tg_bridge.cursor import ExportCursor
-from tg_bridge.errors import ExportFileError, RateLimitedError, TgBridgeError
+from tg_bridge.cursor import ExportCursor, decode_export_cursor, encode_export_cursor
+from tg_bridge.errors import CursorError, ExportFileError, RateLimitedError, TgBridgeError
 from tg_bridge.format import SEP, WEEKDAYS, chat_link_base, duration_text, one_line, size_text
 from tg_bridge.resolve import normalize
 from tg_bridge.source import Chat, ChatInfo, MediaInfo, Message, MessageQuery, MessageSource, Person
@@ -26,10 +26,12 @@ EXPORT_PAGE = 500
 # Telethon already sleeps through FloodWaits up to 30 s; beyond MAX_FLOOD_WAIT we stop rather than hang the tool call.
 MAX_FLOOD_WAIT = 300
 MAX_FLOOD_RETRIES = 3
-# LM Studio gives up on a tool call after ~60 s; a call pauses after this many seconds and returns a cursor instead.
+# LM Studio gives up on a tool call after ~60 s; a call pauses after this many seconds and can be resumed.
 EXPORT_TIME_BUDGET = 40.0
 PAUSED = "paused, to be continued"
-_FOOTER_TAIL = 4096  # bytes; the footer is one short line
+_FOOTER_TAIL = 4096  # bytes; the footer is two short lines
+# Hidden in rendered Markdown. It carries what `resume` needs, so the model has nothing to copy (it garbled cursors).
+_RESUME_NOTE = re.compile(rb"<!-- tg-bridge resume: (\S+) -->")
 MAX_NAME_SUFFIX = 99
 # Every control character but \n and \t (line breaks are normalised before this runs).
 _STRIP = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
@@ -208,7 +210,6 @@ class ExportResult:
     last: datetime | None
     stopped: str | None  # why it ended early; None = complete or paused
     paused: bool = False  # hit the time limit of one call
-    cursor: ExportCursor | None = None  # continues this file; set when paused or stopped
 
 
 def _create_file(
@@ -226,24 +227,32 @@ def _create_file(
     raise FileExistsError(f"no free export file name after {MAX_NAME_SUFFIX} tries")
 
 
-def _reopen_file(dest_dir: Path, chat: Chat, resume: ExportCursor, tz: ZoneInfo) -> tuple[Path, TextIO]:
-    """Finds the file a cursor continues, cuts its footer off and opens it for appending."""
-    suffix = f"_{resume.file_n}" if resume.file_n > 1 else ""
-    pattern = f"*_{chat.id}_*_{resume.file_stamp.astimezone(tz):%Y%m%d-%H%M%S}{suffix}.md"
-    matches = list(dest_dir.glob(pattern)) if dest_dir.is_dir() else []
-    if len(matches) != 1:
-        raise ExportFileError("The file of this export is gone. Call export_chat again without cursor.")
-    path = matches[0]
+def _reopen_latest(dest_dir: Path, chat: Chat) -> tuple[Path, ExportCursor, TextIO]:
+    """The chat's newest export file, its resume state, and the file opened for appending with the footer cut off."""
+    nothing = ExportFileError("No unfinished export of this chat to resume. Call export_chat without resume to start one.")
+    # The slug has no underscores, so `_<id>_` only matches this chat's files.
+    files = list(dest_dir.glob(f"*_{chat.id}_*.md")) if dest_dir.is_dir() else []
+    if not files:
+        raise nothing
+    path = max(files, key=lambda p: p.stat().st_mtime)
     with open(path, "r+b") as f:
         size = f.seek(0, os.SEEK_END)
         f.seek(max(0, size - _FOOTER_TAIL))
         tail = f.read()
         # Chat text never yields a bare "---" line (escape_block), so this is the footer.
         cut = tail.rfind(b"\n---\n")
-        if cut < 0 or tail.rstrip().endswith(b" complete"):
-            raise ExportFileError("This export is already complete; its file has every message.")
+        note = _RESUME_NOTE.search(tail, cut) if cut >= 0 else None
+        if note is None:
+            if tail.rstrip().endswith(b" complete"):
+                raise ExportFileError(f"The latest export of this chat is already complete: {path}")
+            raise nothing
+        try:
+            state = decode_export_cursor(note.group(1).decode("ascii"), chat.id)
+        except CursorError:
+            raise nothing from None
         f.truncate(size - len(tail) + cut + 1)
-    return path, os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND), "w", encoding="utf-8", newline="\n")
+    out = os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND), "w", encoding="utf-8", newline="\n")
+    return path, state, out
 
 
 async def export_chat_file(
@@ -254,12 +263,13 @@ async def export_chat_file(
     tz: ZoneInfo,
     now: datetime,
     *,
-    resume: ExportCursor | None = None,
+    resume: bool = False,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> ExportResult:
     """Pages through the chat oldest first and appends each page to a new Markdown file in `dest_dir`, or, with
-    `resume`, to the file an earlier call paused. After EXPORT_TIME_BUDGET seconds it pauses with a cursor.
+    `resume`, to the chat's latest unfinished file (its period wins over `period`). After EXPORT_TIME_BUDGET seconds
+    it pauses; the file then ends with a hidden note that `resume` continues from.
     A rate limit or other bridge error mid-way ends the file with an INCOMPLETE footer and is reported in the result;
     anything else also leaves that footer but propagates."""
     chat = info.chat
@@ -274,11 +284,21 @@ async def export_chat_file(
     stopped: str | None = None
     paused = False
     boundary: int | None = None
-    if resume is not None:
-        path, out = _reopen_file(dest_dir, chat, resume, tz)
-        file_n, file_stamp, boundary = resume.file_n, resume.file_stamp, resume.boundary_id
-        count, first, last = resume.count, resume.first, resume.last
+    if resume:
+        path, note, out = _reopen_latest(dest_dir, chat)
+        period = Period(note.start, note.end)
+        file_n, file_stamp, boundary = note.file_n, note.file_stamp, note.boundary_id
+        count, first, last = note.count, note.first, note.last
         state.day = last.astimezone(tz).date()
+
+    def resume_note() -> str:
+        if boundary is None or first is None or last is None:
+            return ""
+        token = encode_export_cursor(
+            ExportCursor(chat.id, file_stamp, file_n, boundary, period.start, period.end, count, first, last)
+        )
+        return f"<!-- tg-bridge resume: {token} -->\n"
+
     try:
         while True:
             query = MessageQuery("forward", period.start, period.end, boundary, None, False, EXPORT_PAGE)
@@ -313,9 +333,11 @@ async def export_chat_file(
                 break
         if out is not None:
             out.write(render_footer(count, first, last, tz, PAUSED if paused else stopped))
+            if paused or stopped is not None:
+                out.write(resume_note())
     except BaseException:
         if out is not None:
-            out.write(render_footer(count, first, last, tz, "interrupted"))
+            out.write(render_footer(count, first, last, tz, "interrupted") + resume_note())
         raise
     finally:
         if out is not None:
@@ -326,7 +348,4 @@ async def export_chat_file(
         chat.id, count, pages, time.monotonic() - started,
         "paused" if paused else "complete" if stopped is None else "stopped",
     )
-    cursor = None
-    if (paused or stopped is not None) and boundary is not None and first is not None and last is not None:
-        cursor = ExportCursor(chat.id, file_stamp, file_n, boundary, period.start, period.end, count, first, last)
-    return ExportResult(path, count, first, last, stopped, paused, cursor)
+    return ExportResult(path, count, first, last, stopped, paused)
