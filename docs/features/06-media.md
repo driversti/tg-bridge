@@ -18,9 +18,9 @@ Download one message's media on explicit request. Nothing is downloaded automati
 - From LM Studio: "download the photo from message #4812 in chat C" saves the file.
 
 ## Smoke checklist (manual, real account, from LM Studio)
-- [ ] A photo and a document download correctly and open.
-- [ ] Asking again returns "Already downloaded", no second file.
-- [ ] A file > ~100 MB (under the limit) finishes over several calls into one file; no `.part` left.
-- [ ] An album message saves all its files into `album_<id>/`.
-- [ ] A file over `TG_BRIDGE_MAX_DOWNLOAD_MB` is refused with its size.
-- [ ] A voice message saves as `.ogg`.
+- [x] A photo and a document download correctly and open.
+- [x] Asking again returns "Already downloaded", no second file.
+- [x] A file > ~100 MB (under the limit) finishes over several calls into one file; no `.part` left.
+- [x] An album message saves all its files into `album_<id>/`.
+- [x] A file over `TG_BRIDGE_MAX_DOWNLOAD_MB` is refused with its size.
+- [x] A voice message saves as `.ogg`.
