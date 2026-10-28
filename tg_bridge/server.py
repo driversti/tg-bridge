@@ -20,6 +20,10 @@ from tg_bridge.telegram.client import ReadOnlyTelegram
 log = logging.getLogger(__name__)
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+# Still read-only towards Telegram, but it creates a local file, so clients may ask before running it.
+WRITES_LOCAL_FILE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+)
 
 
 def build_server(source: MessageSource, settings: Settings) -> MCPServer:
@@ -104,7 +108,7 @@ def build_server(source: MessageSource, settings: Settings) -> MCPServer:
             limit=limit,
         )
 
-    @server.tool(annotations=READ_ONLY, structured_output=False)
+    @server.tool(annotations=WRITES_LOCAL_FILE, structured_output=False)
     async def export_chat(
         chat: str,
         days: int | None = None,

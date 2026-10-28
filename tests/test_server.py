@@ -15,7 +15,8 @@ async def test_lists_tools(settings):
     tools = await build_server(FakeSource(), settings).list_tools()
 
     assert sorted(t.name for t in tools) == ["export_chat", "get_chat_info", "get_messages", "list_chats", "search_messages", "whoami"]
-    assert all(t.annotations.read_only_hint is True for t in tools)
+    # export_chat writes a local file; every other tool changes nothing at all.
+    assert all(t.annotations.read_only_hint is (t.name != "export_chat") for t in tools)
 
 
 async def test_call_whoami_returns_plain_text(settings):
@@ -77,11 +78,12 @@ async def test_search_messages_registered_read_only(settings):
     assert "NOT meaning" in t.description and "around=<#id>" in t.description
 
 
-async def test_export_chat_registered_read_only(settings):
+async def test_export_chat_registered_as_local_file_writer(settings):
     tools = {t.name: t for t in await build_server(FakeSource(), settings).list_tools()}
 
     t = tools["export_chat"]
-    assert t.annotations.read_only_hint is True
+    a = t.annotations
+    assert (a.read_only_hint, a.destructive_hint, a.idempotent_hint, a.open_world_hint) == (False, False, False, False)
     assert set(t.input_schema["properties"]) == {"chat", "days", "since", "until", "format"}
     assert t.input_schema["required"] == ["chat"]
     assert "NOT the messages" in t.description
