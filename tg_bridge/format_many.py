@@ -101,7 +101,7 @@ def _page_text(
             day = local.date()
             lines.append(f"— {day.isoformat()} {WEEKDAYS[day.weekday()]} —")
         if isinstance(item, Repost):
-            lines.append(_headline_line(item, local, labels, text_limit))
+            lines.append(_headline_line(item, local, chats, labels, text_limit))
         else:
             label = labels.get(item.chat_id, str(item.chat_id)) if labels is not None else None
             lines.append(_message_line(item, f"{local:%H:%M}", seen_people, text_limit, label=label))
@@ -118,14 +118,22 @@ def _boundary(item: Item) -> Message:
     return item.first if isinstance(item, Repost) else item
 
 
-def _headline_line(group: Repost, local: datetime, labels: Mapping[int, str] | None, text_limit: int | None) -> str:
+def _headline_line(
+    group: Repost, local: datetime, chats: Mapping[int, Chat], labels: Mapping[int, str] | None, text_limit: int | None
+) -> str:
     text = headline(group.first.text) or ""
     if text_limit is not None and len(text) > text_limit:
         text = text[: max(text_limit - 1, 0)] + "…"
 
     def ref(msg: Message) -> str:
-        return f"{labels.get(msg.chat_id, str(msg.chat_id))} #{msg.id}" if labels is not None else f"#{msg.id}"
+        # A full link per post: the model did not fill the legend's `Links: …/<id>` in itself (smoke 08).
+        chat = chats.get(msg.chat_id)
+        base = chat_link_base(chat) if chat is not None else None
+        return f"{base}/{msg.id}" if base else f"#{msg.id}"
 
-    who = ", ".join(ref(m) for m in group.posts)
+    refs = " ".join(ref(m) for m in group.posts)
+    if labels is None:
+        return f"{local:%H:%M} {text} {refs}"
+    who = ", ".join(labels.get(m.chat_id, str(m.chat_id)) for m in group.posts)
     prefix = f"×{len(group.posts)} " if len(group.posts) > 1 else ""
-    return f"{local:%H:%M} {prefix}{who}: {text}"
+    return f"{local:%H:%M} {prefix}{who}: {text} {refs}"

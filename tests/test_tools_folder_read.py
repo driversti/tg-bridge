@@ -240,8 +240,8 @@ async def test_folder_headlines_groups_reposts(settings):
         "Motorsport UA = -2002",
         "P1 = -2003",
         "— 2026-10-26 Mon —",
-        f"09:00 ×3 F1 News #4812, Motorsport UA #911, P1 #77: {NEWS_TEXT}",
-        "10:30 F1 News #8: Norris wins the Mexican GP",
+        f"09:00 ×3 F1 News, Motorsport UA, P1: {NEWS_TEXT} https://t.me/f1news/4812 #911 #77",
+        "10:30 F1 News: Norris wins the Mexican GP https://t.me/f1news/8",
         "End of period.",
     ]
 
@@ -315,8 +315,8 @@ async def test_single_chat_headlines(settings):
         "Mode: headlines",
         "3 posts → 2 headlines (1 without text skipped); showing 1–2.",
         "— 2026-10-26 Mon —",
-        "09:00 #1: BREAKING",
-        "09:20 #3: Norris wins",
+        "09:00 BREAKING https://t.me/f1news/1",
+        "09:20 Norris wins https://t.me/f1news/3",
         "End of period.",
     ]
 
@@ -330,7 +330,7 @@ async def test_single_chat_headlines_cursor_scope_is_chat(settings):
     assert "_k" not in args["cursor"] and args["cursor"].endswith("_h")
 
     second = await run(source, settings, cursor=args["cursor"], limit=2)  # chat comes from the cursor
-    assert "showing 3–4." in second and "#3:" in second and "#2:" not in second
+    assert "showing 3–4." in second and "f1news/3\n" in second and "f1news/2\n" not in second
 
 
 async def test_headlines_with_topic_is_rejected(settings):

@@ -125,7 +125,7 @@ async def test_call_get_messages_folder_headlines(settings):
     assert result.is_error is False
     text = result.content[0].text
     assert text.startswith(f"{NOW_LINE}\nFolder: F1 (5)")
-    assert "F1 News #7: Norris wins the Mexican GP" in text
+    assert "F1 News: Norris wins the Mexican GP #7" in text  # no link: that chat has no username
 
 
 async def test_call_get_messages(settings):

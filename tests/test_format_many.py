@@ -86,8 +86,9 @@ def test_headline_line_single_and_repost():
     single = Repost((post(4812, NEWS, text="Norris wins"),))
     group = Repost((post(4812, NEWS), post(911, UA, 5), post(77, PADDOCK, 9)))
     lines = many([single, group]).splitlines()
-    assert "14:03 F1 News #4812: Norris wins" in lines
-    assert "14:03 ×3 F1 News #4812, Motorsport UA #911, F1 Paddock #77: Verstappen signs a new contract" in lines
+    # Full post links where the chat has them: the model did not fill `Links: …/<id>` in on its own (smoke 08).
+    assert "14:03 F1 News: Norris wins https://t.me/f1news/4812" in lines
+    assert "14:03 ×3 F1 News, Motorsport UA, F1 Paddock: Verstappen signs a new contract https://t.me/f1news/4812 #911 #77" in lines
 
 
 def test_headline_line_single_chat_has_no_label_or_legend():
@@ -97,7 +98,7 @@ def test_headline_line_single_chat_has_no_label_or_legend():
         "HEAD",
         "TOTALS showing 1–1",
         "— 2026-10-26 Mon —",
-        "14:03 #4812: Norris wins",
+        "14:03 Norris wins https://t.me/f1news/4812",
         "End of period.",
     ]
 
