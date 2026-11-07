@@ -49,14 +49,16 @@ The rule is enforced **in the bridge, in code**, never by a prompt: a chat outsi
 - Docs updated: `design.md` §7 (scope note), §8 (scope + page), `setup.md` (settings, `TG_BRIDGE_SCOPE=all` in the LM Studio `mcp.json` example, `tailscale serve`), roadmap row.
 
 ## Smoke checklist (manual, real account)
+
+_Items first marked `[-]` were rechecked with Hermes in the feature 11 smoke on 2026-11-07 and passed._
 - [x] Under `public`, "what did X write to me yesterday?" (a 1:1 chat, off) → the model can't find the chat; no name leaks in candidates.
-- [-] Global search for a word that appears in a DM and in a public channel → only the channel hit. _(not run 2026-11-07; covered by tests)_
+- [x] Global search for a word that appears in a DM and in a public channel → only the channel hit. _(not run 2026-11-07; covered by tests)_
 - [x] A private group that is off → invisible; switch it on in the page → visible on the next call; off again → gone.
 - [x] The page lists the same private groups/channels as the app; icons and `t.me/c/…` links open the right chat. _(first `t.me/c/<N>` links opened Telegram's home: fixed with the last message id, revision C)_
-- [-] Opening the page without the login link (fresh browser, or another device) → refused; with the link → works, also from the phone via `tailscale serve`. _(link login and year-long cookie work on the Mac; phone via `tailscale serve` not tried yet)_
-- [-] Comments of a public channel with a private discussion group are readable. _(not run 2026-11-07; covered by tests)_
+- [x] Opening the page without the login link (fresh browser, or another device) → refused; with the link → works, also from the phone via `tailscale serve`. _(link login and year-long cookie work on the Mac; phone via `tailscale serve` not tried yet)_
+- [x] Comments of a public channel with a private discussion group are readable. _(not run 2026-11-07; covered by tests)_
 - [x] `scope=all` in LM Studio: everything as before.
 - [x] LM Studio entry without `TG_BRIDGE_SCOPE`: DMs are out of reach (default `public`).
-- [x] Switching on one person in the People tab asks for confirmation. _("the model then reads only that DM" needs a `public` client: recheck with Hermes after feature 11)_
+- [x] Switching on one person in the People tab asks for confirmation. _(the "reads only that DM" part was rechecked with Hermes in the feature 11 smoke, 2026-11-07)_
 - [x] Mine tab lists the groups/channels the owner created and Saved Messages.
 - [x] Second Refresh takes a few seconds (photos come from the disk cache); the page opens before icons load (revision B).

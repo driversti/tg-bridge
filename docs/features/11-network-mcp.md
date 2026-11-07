@@ -88,18 +88,20 @@ Facts checked on LXC 110 (2026-11-07): Hermes **v0.23.0**, runs as `hermes-gatew
 - Docs: `design.md` §6 (network mode), §8 (replace "No MCP network listener" with the network rules, the two keys, the bot guard), `setup.md` (Homelab LXC), `deploy/COMMANDS.md`, roadmap row.
 
 ## Smoke checklist (manual, real account, with the owner)
-- [ ] New LXC, fresh login with the custom device name; Telegram's Devices list shows it.
-- [ ] Bridge starts under systemd; the Homelab bot delivers the link; restart → a new message arrives.
-- [ ] From the phone over Tailscale (away from home or with Wi-Fi off): the link opens the page; without it → refused.
-- [ ] From Hermes' LXC: no token → 401; Hermes configured → `hermes mcp list` shows tg-bridge and its tools.
-- [ ] From the phone in Telegram: the "Недільний AI Чекін #104 in @imatrofAI" question returns the list.
-- [ ] A folder summary and a search work; DMs are out of reach.
-- [ ] Switch on one DM in the page → Hermes reads only that DM; off → gone (left over from 17).
-- [ ] Global search for a word in a DM and a public channel → only the channel hit (left over from 17).
-- [ ] Comments of a public channel with a private discussion group are readable (left over from 17).
-- [ ] The Homelab bot chat can't be switched on, and Hermes can't find it.
-- [ ] Another LAN device (not Hermes' IP) can't reach the MCP port (firewall).
-- [ ] The cheat sheet's commands all work as written.
+
+_Run by the owner on 2026-11-07: all items passed._
+- [x] New LXC, fresh login with the custom device name; Telegram's Devices list shows it.
+- [x] Bridge starts under systemd; the Homelab bot delivers the link; restart → a new message arrives.
+- [x] From the phone over Tailscale (away from home or with Wi-Fi off): the link opens the page; without it → refused.
+- [x] From Hermes' LXC: no token → 401; Hermes configured → `hermes mcp list` shows tg-bridge and its tools.
+- [x] From the phone in Telegram: the "Недільний AI Чекін #104 in @imatrofAI" question returns the list.
+- [x] A folder summary and a search work; DMs are out of reach.
+- [x] Switch on one DM in the page → Hermes reads only that DM; off → gone (left over from 17).
+- [x] Global search for a word in a DM and a public channel → only the channel hit (left over from 17).
+- [x] Comments of a public channel with a private discussion group are readable (left over from 17).
+- [x] The Homelab bot chat can't be switched on, and Hermes can't find it.
+- [x] Another LAN device (not Hermes' IP) can't reach the MCP port (firewall).
+- [x] The cheat sheet's commands all work as written.
 
 ## Log
 
