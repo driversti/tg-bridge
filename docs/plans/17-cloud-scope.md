@@ -179,3 +179,19 @@ The first start with people listed downloads hundreds of photos before the page 
 - The page shows `Icons: <loaded>/<total>` in the meta line while the worker runs (counts only) and nothing when done. Rows without a file show the letter placeholder; reloading the page shows more icons. No JS polling.
 - Stopping with Ctrl+C stops the worker (daemon thread; disconnect if it is mid-batch is not required).
 - Tests (`tests/test_admin.py`, no real Telegram: inject a fake downloader): the server answers before any photo is downloaded; the worker downloads in batches and connects/disconnects per batch; a busy batch is retried; the lock keeps Refresh and a batch from overlapping (fake downloader records overlaps); after Refresh the worker picks up new missing photos; the meta line shows progress and disappears when done.
+
+## Revision C (smoke, 2026-11-07): stable login link, working chat links
+
+Smoke: the login link lives only in the terminal and changes on every start; "Copy link" gives no feedback, and `t.me/c/<N>` without a message id opens Telegram's home page.
+
+### C1. Stable login link (owner chose this over a password)
+- Token file `session_path.with_name(f"{stem}.admin-token")`, mode `0o600` (atomic create, dir `0o700`), holding `secrets.token_urlsafe(32)`. Created on first need; a malformed/empty file → refuse to start with a clear message telling to run `--new-link` (do not silently replace it).
+- Cookie value = `hmac.new(token, b"cookie", sha256).hexdigest()`, CSRF = `hmac(token, b"csrf")`; both stable across restarts, both change when the token changes. Cookie gets `Max-Age=31536000` (plus the existing HttpOnly, SameSite=Strict, Path=/).
+- CLI (`argparse`): no args → run the page as now and print the link; `--link` → print the link and exit (no Telegram, no server); `--new-link` → write a new token, print the new link, exit (old links and cookies stop working). Printing stays on stderr via `print`, never `logging`.
+- Tests: token file created with 600 and reused; cookie/CSRF stable across two `AdminApp`s built from the same token and different after `--new-link`; `--link` prints without touching Telegram (inject); malformed token file → exit with message; cookie header has `Max-Age`.
+
+### C2. Chat links
+- `Chat.top_message_id: int | None = None` from the dialog (`dialog.message.id`, or the raw `dialog.dialog.top_message`), no extra requests; `DialogCache` reads it with `.get`.
+- `_tme_link` rules: public channel/supergroup → `https://t.me/<username>`; private `-100N` channel/supergroup → `https://t.me/c/<N>/<top_message_id>` when `top_message_id` is set, else no link; person/bot with a valid username → `https://t.me/<username>`; person/bot without → `tg://user?id=<id>`; Saved Messages and basic groups → no link.
+- Row: an "Open" anchor (`target=_blank rel="noopener noreferrer"`) and a "Copy" button. The script gives feedback: button text "Copied ✓" for 1.5 s on success, "Copy failed" on a rejected clipboard write. Still no chat data in JS beyond the `data-link` attribute.
+- Tests: link rules per kind (incl. no top id, username with invalid chars), Open anchor present with the right href, script contains no chat data.
