@@ -73,3 +73,5 @@ _(deviations from design, one line each)_
 - 11: after the smoke the admin page got a live chat filter: typing in the search box hides non-matching rows in the browser (rows carry their normalized title in `data-t`; the Filter button still filters on the server).
 - 14: no brief or plan needed: it was setup only, done and checked as part of 11's smoke with Hermes (2026-11-07).
 - 08, 16: smoke checklists ticked only where the log records a result; the other items are marked "Not rechecked" (2026-11-07).
+- 05: `export_deleted_users` has no `dir` argument (the brief had `dir?`): a model-supplied path could write anywhere on the host, and on CT 120 that host is a server. Files always go to `<EXPORT_DIR>/deleted-users/`.
+- 05: identity guesses come only from contact cards whose `user_id` is the deleted peer (brief said forwards/replies/mentions): a deleted account's own name is gone everywhere, forward names can't be tied to the peer, and cards are the one place the name survives. Phones from cards are not taken.
