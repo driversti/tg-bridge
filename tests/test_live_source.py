@@ -417,3 +417,17 @@ async def test_media_methods_connect_and_delegate():
     assert chunks == [b"ab"]
     assert tg.connect_calls == 1
     assert tg.message_calls == [("media_files", chat, 7), ("read_media", chat, 7, 1024)]
+
+
+async def test_download_chat_photo_connects_and_passes_through():
+    class Photos(StubTelegram):
+        async def download_chat_photo(self, chat_id):
+            return b"jpeg" + str(chat_id).encode()
+
+    tg = Photos()
+    source = LiveSource(tg)
+    assert await source.download_chat_photo(7) == b"jpeg7"
+    assert tg.connect_calls == 1
+    await source.close()
+    await source.close()  # idempotent: MCP's lifespan closes it again
+    assert tg.disconnect_calls == 1

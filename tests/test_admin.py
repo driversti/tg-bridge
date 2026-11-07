@@ -44,7 +44,7 @@ def snapshot(**kw):
 
 
 class Harness:
-    def __init__(self, tmp_path, fetch, hidden=frozenset()):
+    def __init__(self, tmp_path, fetch, hidden=frozenset(), token_source=None, server_kw=None):
         self.allowlist = Allowlist(tmp_path / "a.json")
         self.photo_dir = tmp_path / "photos"
         self.photo_dir.mkdir()
@@ -53,10 +53,10 @@ class Harness:
         self._fetch = fetch
         self.app = AdminApp(
             self._counted, self.allowlist, LOGIN, COOKIE, CSRF, photo_dir=self.photo_dir, clock=lambda: self.now,
-            hidden=hidden,
+            hidden=hidden, token_source=token_source,
         )
         self.app.refresh()  # what main() does before it starts serving
-        self.server = make_server(self.app, 0)
+        self.server = make_server(self.app, 0, **(server_kw or {}))
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.thread.start()
 
@@ -811,3 +811,73 @@ def test_admin_bot_chat_locked_no_switch(guarded):
 def test_admin_post_toggle_bot_chat_400(guarded):
     assert guarded.post("/toggle", form(BOT.id, "1", tab="people"))[0].status == 400
     assert guarded.allowlist.load() == frozenset()
+
+
+# --- rotating token source, Secure cookie, Host check (feature 11) ---
+
+TOKEN_A, TOKEN_B = "a" * 40, "b" * 40
+
+
+class Rotating:
+    def __init__(self, token):
+        self.token = token
+
+    def __call__(self):
+        return self.token
+
+
+def cookie_for(token):
+    return admin.derive_secrets(token)[0]
+
+
+def test_token_source_rotation_logs_out_old_cookie(tmp_path):
+    src = Rotating(TOKEN_A)
+    h = Harness(tmp_path, lambda: snapshot(), token_source=src)
+    try:
+        resp, _ = h.get(f"/login?token={TOKEN_A}", cookie=None)
+        assert resp.status == 303
+        assert h.get("/", cookie=cookie_for(TOKEN_A))[0].status == 200
+        src.token = TOKEN_B
+        assert h.get("/", cookie=cookie_for(TOKEN_A))[0].status == 403
+        assert h.get(f"/login?token={TOKEN_A}", cookie=None)[0].status == 403
+        assert h.get(f"/login?token={TOKEN_B}", cookie=None)[0].status == 303
+        assert h.get("/", cookie=cookie_for(TOKEN_B))[0].status == 200
+    finally:
+        h.close()
+
+
+def test_token_source_none_refuses_login(tmp_path):
+    src = Rotating(None)
+    h = Harness(tmp_path, lambda: snapshot(), token_source=src)
+    try:
+        assert h.get(f"/login?token={TOKEN_A}", cookie=None)[0].status == 403
+        assert h.get("/login?token=", cookie=None)[0].status == 403
+        assert h.get("/", cookie="")[0].status == 403
+        assert h.post("/toggle", form(GROUP.id, "1"), cookie="")[0].status == 403
+    finally:
+        h.close()
+
+
+@pytest.mark.parametrize("secure", [True, False])
+def test_secure_cookie_flag(tmp_path, secure):
+    h = Harness(tmp_path, lambda: snapshot(), server_kw={"secure_cookie": secure})
+    try:
+        resp, _ = h.get(f"/login?token={LOGIN}", cookie=None)
+        assert ("Secure" in resp.getheader("Set-Cookie").split("; ")) is secure
+    finally:
+        h.close()
+
+
+def test_host_check(tmp_path):
+    h = Harness(tmp_path, lambda: snapshot(), server_kw={"allowed_hosts": frozenset({"tg-bridge.tail4be1a2.ts.net"})})
+    try:
+        assert h.get("/", headers={"Host": "tg-bridge.tail4be1a2.ts.net"})[0].status == 200
+        assert h.get("/", headers={"Host": "192.168.10.22:8765"})[0].status == 400
+        assert h.get(f"/login?token={LOGIN}", cookie=None, headers={"Host": "evil.example"})[0].status == 400
+        assert h.post("/refresh", {"csrf": CSRF}, headers={"Host": "evil.example"})[0].status == 400
+    finally:
+        h.close()
+
+
+def test_no_allowed_hosts_means_no_host_check(harness):
+    assert harness.get("/", headers={"Host": "anything.example"})[0].status == 200

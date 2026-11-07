@@ -50,6 +50,7 @@ log = logging.getLogger(__name__)
 HOST = "127.0.0.1"
 COOKIE_NAME = "tgb_admin"
 COOKIE_MAX_AGE = 365 * 24 * 3600
+IN_PROCESS_TIMEOUT = 120  # seconds a page request waits for the MCP loop
 MAX_BODY = 16 * 1024
 BUSY_TEXT = "Telegram session is busy (LM Studio is using it); try Refresh in a moment."
 REFRESH_COOLDOWN = 10.0  # seconds; a double click must not fetch twice
@@ -128,10 +129,15 @@ async def fetch_snapshot(settings: Settings) -> Snapshot:
     cache = DialogCache(settings.session_path.with_name(f"{settings.session_path.stem}.dialogs.json"))
     live = LiveSource(telegram, dialog_cache=cache)
     try:
-        chats = await live.list_dialogs(refresh=True)
-        folders = await live.list_folders()
+        return await snapshot_from(live)
     finally:
         await live.close()
+
+
+async def snapshot_from(live: LiveSource) -> Snapshot:
+    """Dialogs and folders from a source somebody else owns: nothing is created or closed here."""
+    chats = await live.list_dialogs(refresh=True)
+    folders = await live.list_folders()
     log.info("admin snapshot: %d dialogs, %d folders", len(chats), len(folders))
     return Snapshot(chats, folders, datetime.now().astimezone())
 
@@ -153,6 +159,19 @@ async def download_photos(settings: Settings, photo_dir: Path, chats: list[Chat]
                 log.warning("admin photo skipped: %s", type(e).__name__)
     finally:
         await telegram.disconnect()
+
+
+async def download_photos_with(live: LiveSource, photo_dir: Path, chats: list[Chat]) -> None:
+    """Like `download_photos`, but on a connected source shared with the MCP tools."""
+    for chat in chats:
+        try:
+            data = await live.download_chat_photo(chat.id)
+            if data:
+                _store_photo(photo_dir, chat, data)
+        except SessionBusyError:
+            raise
+        except Exception as e:  # noqa: BLE001 - a missing icon is not worth stopping for
+            log.warning("admin photo skipped: %s", type(e).__name__)
 
 
 class PhotoWorker:
@@ -247,21 +266,24 @@ class AdminApp:
         self,
         fetch: Callable[[], Snapshot],
         allowlist: Allowlist,
-        login_token: str,
-        session_cookie: str,
-        csrf: str,
+        login_token: str = "",
+        session_cookie: str = "",
+        csrf: str = "",
         photo_dir: Path | None = None,
         clock: Callable[[], float] = time.monotonic,
         lock: AbstractContextManager | None = None,
         photos: "PhotoWorker | None" = None,
         hidden: frozenset[int] = frozenset(),
+        token_source: Callable[[], str | None] | None = None,
     ):
         self.hidden = hidden  # chats that can never be switched on (e.g. the bot chat that gets login links)
         self._fetch = fetch
         self.allowlist = allowlist
-        self.login_token = login_token
-        self.session_cookie = session_cookie
-        self.csrf = csrf
+        self._fixed = (login_token, session_cookie, csrf)
+        # Network mode: the token file is the only truth and is consulted on every request, so a rotation
+        # logs out the old cookie at once. None means "no valid token": every route refuses.
+        self._token_source = token_source
+        self._derived: tuple[str, str, str] | None = None
         self.snapshot: Snapshot | None = None
         self.notice: str | None = None
         self.photo_dir = photo_dir
@@ -269,6 +291,32 @@ class AdminApp:
         self._last_ok: float | None = None
         self.lock = lock if lock is not None else threading.Lock()  # every Telegram use takes it
         self.photos = photos
+
+    def _secrets(self) -> tuple[str, str, str] | None:
+        """(login token, session cookie, csrf), or None when a token source has no valid token."""
+        if self._token_source is None:
+            return self._fixed
+        token = self._token_source()
+        if token is None:
+            return None
+        if self._derived is None or self._derived[0] != token:
+            self._derived = (token, *derive_secrets(token))
+        return self._derived
+
+    @property
+    def login_token(self) -> str | None:
+        found = self._secrets()
+        return None if found is None else found[0]
+
+    @property
+    def session_cookie(self) -> str | None:
+        found = self._secrets()
+        return None if found is None else found[1]
+
+    @property
+    def csrf(self) -> str | None:
+        found = self._secrets()
+        return None if found is None else found[2]
 
     def refresh_unless_recent(self) -> None:
         """The Refresh button: a second press right after a successful fetch is ignored."""
@@ -370,7 +418,7 @@ class AdminApp:
             f'<input type="hidden" name="tab" value="{html.escape(keep["tab"], quote=True)}">'
             '<button type="submit">Filter</button></form>'
             '<form method="post" action="/refresh" data-refresh="1">'
-            f'<input type="hidden" name="csrf" value="{html.escape(self.csrf)}">{_hidden(keep)}'
+            f'<input type="hidden" name="csrf" value="{html.escape(self.csrf or "")}">{_hidden(keep)}'
             '<button type="submit">Refresh from Telegram</button></form>'
         )
 
@@ -402,7 +450,7 @@ class AdminApp:
             confirm = ' data-confirm="1"' if chat.kind in ("user", "bot") and not on else ""
             switch = (
                 '<form method="post" action="/toggle">'
-                f'<input type="hidden" name="csrf" value="{html.escape(self.csrf)}">'
+                f'<input type="hidden" name="csrf" value="{html.escape(self.csrf or "")}">'
                 f'<input type="hidden" name="chat_id" value="{chat.id}">'
                 f'<input type="hidden" name="on" value="{0 if on else 1}">{_hidden(keep)}'
                 f'<button type="submit"{confirm} class="switch {"on" if on else "off"}">{"On" if on else "Off"}</button></form>'
@@ -480,8 +528,14 @@ _JS = (
 )
 
 
-def make_server(app: AdminApp, port: int) -> HTTPServer:
-    """Plain single-threaded HTTPServer on loopback: snapshot refresh and allowlist writes never race."""
+def make_server(
+    app: AdminApp, port: int, *, secure_cookie: bool = False, allowed_hosts: frozenset[str] | None = None
+) -> HTTPServer:
+    """Plain single-threaded HTTPServer on loopback: snapshot refresh and allowlist writes never race.
+
+    `secure_cookie` adds `Secure` (the page is reached over HTTPS via Tailscale); `allowed_hosts`, when given,
+    answers any other `Host` with 400."""
+    allowed = None if allowed_hosts is None else frozenset(h.lower() for h in allowed_hosts)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "tg-bridge-admin"
@@ -521,7 +575,8 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
             except cookies.CookieError:
                 return False
             morsel = jar.get(COOKIE_NAME)
-            return morsel is not None and hmac.compare_digest(morsel.value, app.session_cookie)
+            expected = app.session_cookie
+            return morsel is not None and expected is not None and hmac.compare_digest(morsel.value, expected)
 
         def _forbidden(self):
             self._text(403, "Open the login link printed in the terminal.")
@@ -537,7 +592,16 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
             return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
         def _csrf_ok(self, form: dict[str, str]) -> bool:
-            return hmac.compare_digest(form.get("csrf", ""), app.csrf)
+            expected = app.csrf
+            return expected is not None and hmac.compare_digest(form.get("csrf", ""), expected)
+
+        def _host_ok(self) -> bool:
+            if allowed is None:
+                return True
+            if self.headers.get("Host", "").lower() in allowed:
+                return True
+            self._text(400, "Unknown host.")
+            return False
 
         @staticmethod
         def _back(form: dict[str, str]) -> str:
@@ -546,12 +610,17 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
 
         # --- routes
         def do_GET(self):  # noqa: N802
+            if not self._host_ok():
+                return
             url = urlsplit(self.path)
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             if url.path == "/login":
                 token = query.get("token", "")
-                if hmac.compare_digest(token, app.login_token):
+                expected = app.login_token
+                if expected is not None and hmac.compare_digest(token, expected):
                     cookie = f"{COOKIE_NAME}={app.session_cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
+                    if secure_cookie:
+                        cookie += "; Secure"
                     return self._redirect("/", Set_Cookie=cookie)
                 return self._forbidden()
             if not self._authorized():
@@ -577,6 +646,8 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
             self._send(200, data, "image/jpeg")
 
         def do_POST(self):  # noqa: N802
+            if not self._host_ok():
+                return
             path = urlsplit(self.path).path
             if not self._authorized():
                 return self._forbidden()
@@ -602,6 +673,43 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
             self._redirect(self._back(form))
 
     return HTTPServer((HOST, port), Handler)
+
+
+def start_admin_in_thread(
+    settings: Settings, live: LiveSource, loop: asyncio.AbstractEventLoop, hidden: frozenset[int]
+) -> HTTPServer:
+    """The page inside the network process: the stdlib server runs in its own thread and hands every Telegram
+    call to the main loop, so there is one client for the page and the MCP tools. Returns the bound server;
+    the caller `shutdown()`s it. The first refresh runs in the server thread, so startup never waits for it."""
+
+    def on_loop(coro):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=IN_PROCESS_TIMEOUT)
+
+    photo_dir = photo_dir_for(settings.session_path)
+    lock = threading.Lock()
+    worker = PhotoWorker(lambda chats: on_loop(download_photos_with(live, photo_dir, chats)), photo_dir, lock)
+    app = AdminApp(
+        lambda: on_loop(snapshot_from(live)),
+        Allowlist(allowlist_path(settings.session_path)),
+        photo_dir=photo_dir,
+        lock=lock,
+        photos=worker,
+        hidden=hidden,
+        token_source=admin_token_file(settings.session_path).read,
+    )
+    allowed = {f"{HOST}:{settings.admin_port}", f"localhost:{settings.admin_port}"}
+    secure = False
+    if settings.admin_url:
+        allowed.add(urlsplit(settings.admin_url).netloc)
+        secure = settings.admin_url.startswith("https://")
+    server = make_server(app, settings.admin_port, secure_cookie=secure, allowed_hosts=frozenset(allowed))
+
+    def run() -> None:
+        app.refresh()  # also queues the missing icons
+        server.serve_forever()
+
+    threading.Thread(target=run, name="admin-page", daemon=True).start()
+    return server
 
 
 def main(argv: list[str] | None = None) -> None:
