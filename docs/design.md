@@ -62,8 +62,10 @@ MCP client (LM Studio).
 ## 4. Constraints
 
 - **Hardware:** MacBook Pro M1 Max 64 GB runs LM Studio + tg-bridge (stage 1).
-  A small always-on Linux box on the LAN (Jetson Orin Nano class: 8 GB RAM, NVMe,
-  Docker + Ollama) is reserved for stage 2+ (always-on recorder).
+  An always-on home server (Proxmox, LXC containers) hosts the networked bridge and,
+  later, the recorder. The owner's agent Hermes (LXC 110, cloud model) is the phone-side
+  client. The Jetson Orin Nano planned earlier was dropped (2026-11-07): an 8 GB box can't
+  run a model good enough for multi-step tool use.
 - **Telegram API:** MTProto user client with the user's own `api_id`/`api_hash`
   (see setup.md §1) and a **new, dedicated session** (own login).
 - **Rate limits:** Telegram returns `FloodWait`; the bridge must respect it.
@@ -169,8 +171,8 @@ characters. When there's more, it returns `next_cursor` and says so explicitly i
 text, so the model knows to page or narrow the period.
 
 **Long-period summaries:** the model pages through `get_messages`. If that turns out
-too weak for a ~30B model, a later feature can add a map-reduce `summarize` tool
-backed by a local Ollama model. Not in stage 1.
+too weak for a ~30B model, a later feature can add summarisation, but only via MCP
+sampling (the client's model does the work); the bridge itself never calls an LLM (roadmap).
 
 **Errors** are returned as short human-readable tool results, never stack traces:
 chat not found (with closest matches), ambiguous chat (candidates), FloodWait
@@ -192,8 +194,8 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
   text, names or phone numbers. Only counts, chat ids and durations.
 - **Exports/downloads** go to configurable dirs outside the repo
   (defaults: `~/tg-bridge-data/exports`, `~/tg-bridge-data/downloads`).
-- **No network listener** in stage 1 (stdio). Stage 2 (Jetson, network) must add
-  auth + LAN-only binding before going live.
+- **No network listener** in stage 1 (stdio). The networked bridge (feature 11) must add
+  auth + LAN-only binding and the cloud scope (feature 17) before going live.
 
 ## 9. Testing
 
@@ -209,10 +211,10 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
 
 | Stage | Module | Notes |
 |---|---|---|
-| 2 | **Recorder + ArchiveSource** on Jetson | Always-on listener: new messages, edits (versions), deletions, profile snapshots → SQLite. MCP over network with auth |
+| 2 | **Recorder + ArchiveSource** on the home server (LXC) | Always-on listener: new messages, edits (versions), deletions, profile snapshots → SQLite. MCP over network with auth |
 | 2b | **Backfill** | Throttled, resumable history import into the archive |
-| 3 | **Semantic search** | Embeddings via Ollama on Jetson, `sqlite-vec` |
-| 4 | **Telegram bot** interface | Another MCP client in front of the same tools |
+| 3 | **Semantic search** | Embeddings via a local model (host decided in its brief), `sqlite-vec` |
+| 4 | **Phone access** | Covered by the owner's agent Hermes as an MCP client of the networked bridge with `scope=public` (features 11, 17) |
 | 5 | **Channel/group discovery** by interests | Searches outside existing chats |
 
 ## 11. Clarifications (from builder review; Claude's calls unless marked)
