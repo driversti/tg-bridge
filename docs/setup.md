@@ -27,6 +27,9 @@
 
 Agents: never echo, log or commit these values.
 
+> The project requires Python 3.14. The first `uv run` after moving to it rebuilds `.venv`
+> on 3.14, so the first LM Studio call is slower.
+
 ## 2. First login (interactive)
 
 `uv run python -m tg_bridge.login` asks how to log in and creates
