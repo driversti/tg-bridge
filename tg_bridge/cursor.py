@@ -2,7 +2,7 @@
 
 Short and readable on purpose (`f6782037_s1792969200_c795`): ~30B models garbled long base64 tokens, splicing
 pieces of an earlier cursor into a new one. One letter per field, digits only:
-`f`/`b` direction + boundary id, `s`/`e` period start/end (epoch seconds), `t` topic id, `m` from_me,
+`f`/`b` direction + boundary id, `s`/`e` period start/end (epoch seconds), `t` topic id, `p` channel post id (a comment thread; never together with `t`), `m` from_me,
 `c` the chat id's last three digits, so a cursor pasted into the wrong chat is caught and named.
 """
 
@@ -17,7 +17,7 @@ from tg_bridge.resolve import normalize
 from tg_bridge.source import SearchOffset
 
 _HEAD = re.compile(r"([fb])(\d+)")
-_FIELD = re.compile(r"([setc])(\d+)|m")
+_FIELD = re.compile(r"([setcp])(\d+)|m")
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,7 @@ class Cursor:
     end: datetime | None
     topic_id: int | None
     from_me: bool
+    post_id: int | None = None  # set: this cursor pages the comments of that channel post
 
 
 def encode_cursor(c: Cursor) -> str:
@@ -39,6 +40,8 @@ def encode_cursor(c: Cursor) -> str:
         parts.append(f"e{int(c.end.timestamp())}")
     if c.topic_id is not None:
         parts.append(f"t{c.topic_id}")
+    if c.post_id is not None:
+        parts.append(f"p{c.post_id}")
     if c.from_me:
         parts.append("m")
     parts.append(f"c{_tag(c.chat_id)}")
@@ -57,6 +60,8 @@ def decode_cursor(s: str, chat_id: int) -> Cursor:
         if key is None or key in fields:
             raise CursorError()
         fields[key] = f.group(2) or ""
+    if "t" in fields and "p" in fields:
+        raise CursorError()
     tag = fields.get("c")
     if tag is None or len(tag) != 3:
         raise CursorError()
@@ -70,6 +75,7 @@ def decode_cursor(s: str, chat_id: int) -> Cursor:
         end=_moment(fields.get("e")),
         topic_id=int(fields["t"]) if "t" in fields else None,
         from_me="m" in fields,
+        post_id=int(fields["p"]) if "p" in fields else None,
     )
 
 
