@@ -243,7 +243,7 @@ runs in public scope. Under `public`, `list_chats` ends with the same line.
   It prints a one-time login link with a random token to the terminal; the link sets an HttpOnly, SameSite=Strict
   cookie and every other route needs it. POSTs carry a CSRF token; chat titles (attacker-controlled) are
   HTML-escaped; a CSP forbids anything but the inline style and one nonce'd script; the request log is off because
-  it would contain the token. The page has tabs (Groups, Channels, People, Mine); switching on a person, a bot or
+  it would contain the token. The page has tabs (Groups, Channels, People, Mine); typing in the search box filters the visible rows live in the browser (rows carry their normalized title in a `data-t` attribute, so the script holds no chat data; the Filter button still works server-side); switching on a person, a bot or
   Saved Messages asks for confirmation (generic text in the nonce'd script, no chat data in JS) and switched-on 1:1
   chats are marked "shared with cloud". Small chat photos are cached on disk (`<session stem>.photos/`, dir `700`,
   files `600`, named by chat id and photo id, so only a changed photo is downloaded again); a second Refresh within

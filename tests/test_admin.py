@@ -240,6 +240,14 @@ def test_search_filter(harness):
     assert "Family" not in body
 
 
+def test_rows_carry_normalized_title_for_live_filter(harness):
+    _, body = harness.get("/")
+    assert 'data-t="family"' in body
+    script = body[body.index("<script"):]
+    assert "'input'" in script and "Family" not in script  # live filter on typing; no chat data in JS
+    assert 'id="nomatch"' in body  # hidden "No chats match." line the script toggles
+
+
 def test_folder_filter(harness):
     _, body = harness.get(f"/?folder={FOLDER.id}")
     assert "Family" in body and "Forum Zone" not in body

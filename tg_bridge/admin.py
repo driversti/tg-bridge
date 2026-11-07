@@ -400,8 +400,9 @@ class AdminApp:
         parts.append(self._toolbar(q, chosen, folders, keep))
         for chat in shown:
             parts.append(self._row(chat, chat.id in allowed, keep))
-        if snap is not None and not shown:
-            parts.append('<p class="meta">No chats match.</p>')
+        if snap is not None:
+            hide = "" if not shown else " hidden"
+            parts.append(f'<p class="meta" id="nomatch"{hide}>No chats match.</p>')
         parts.append(f'<script nonce="{nonce}">{_JS}</script></main></body></html>')
         return "".join(parts)
 
@@ -457,7 +458,7 @@ class AdminApp:
             )
         cls = "row shared" if shared else "row"
         return (
-            f'<div class="{cls}">{icon}<div class="body"><div class="title">{title}</div>'
+            f'<div class="{cls}" data-t="{html.escape(normalize(chat.title), quote=True)}">{icon}<div class="body"><div class="title">{title}</div>'
             f"<div>{tags} {link_html}</div></div>{switch}</div>"
         )
 
@@ -512,7 +513,7 @@ _CSS = (
     "border-radius:999px;border:1px solid var(--line);font-size:.8rem;color:var(--mut)}"
     ".tabs{display:flex;flex-wrap:wrap;gap:4px 8px;margin:8px 0}.tabs a{color:var(--acc)}"
     ".row.shared{border-left:4px solid var(--acc);padding-left:8px}.tag.shared{color:var(--acc);border-color:var(--acc)}"
-    ".copy{padding:2px 8px;font-size:.8rem}.switch{min-width:64px}.switch.on{background:var(--ok);color:#fff;border-color:var(--ok)}"
+    ".row[hidden],#nomatch[hidden]{display:none}.copy{padding:2px 8px;font-size:.8rem}.switch{min-width:64px}.switch.on{background:var(--ok);color:#fff;border-color:var(--ok)}"
 )
 # No chat data in script: the copy button carries only the link, in a data attribute; the texts are generic.
 _JS = (
@@ -521,6 +522,10 @@ _JS = (
     "var done=function(m){b.textContent=m;clearTimeout(b._h);b._h=setTimeout(function(){b.textContent=t},1500)};"
     "try{navigator.clipboard.writeText(b.dataset.link).then(function(){done('Copied \\u2713')},"
     "function(){done('Copy failed')})}catch(x){done('Copy failed')}});"
+    "var q=document.querySelector('input[name=q]');if(q){var nf=function(v){return v.normalize('NFKC').toLowerCase()"
+    ".replace(/[^\\p{L}\\p{N}]+/gu,' ').trim()};q.addEventListener('input',function(){var n=nf(q.value),c=0;"
+    "document.querySelectorAll('.row[data-t]').forEach(function(r){var m=!n||r.dataset.t.indexOf(n)>=0;"
+    "r.hidden=!m;if(m)c++});var z=document.getElementById('nomatch');if(z)z.hidden=c>0})}"
     "document.addEventListener('submit',function(e){var f=e.target;"
     "if(f.querySelector('[data-confirm]')&&!confirm('The cloud model will be able to read this whole conversation. "
     "Switch it on?')){e.preventDefault();return}"
