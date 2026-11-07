@@ -39,7 +39,7 @@ Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from L
 - [x] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats always; any private chat, people included, only when switched on) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md) · [plan](plans/17-cloud-scope.md)
 - [ ] 12 Backfill into archive
 - [ ] 13 Semantic search (local embeddings, sqlite-vec)
-- [ ] 14 Phone access via Hermes (MCP client of 11 + 17). Mostly setup once 11 and 17 are done
+- [x] 14 Phone access via Hermes (MCP client of 11 + 17). Mostly setup once 11 and 17 are done
 - [ ] 15 Channel/group discovery
 - [ ] ? Summarisation of large volumes, only via **MCP sampling** (the client's model does the work); the bridge itself never calls an LLM (decided 2026-10-28). Only if 08's headlines mode proves too weak.
 
@@ -71,3 +71,5 @@ _(deviations from design, one line each)_
 - 17: smoke 2026-11-07 on the Mac: default `public` hid DMs, a switched-on group appeared, `all` restored everything; phone via `tailscale serve` and a `public` client reading one switched-on DM are rechecked with Hermes after 11.
 - 11: implemented on `claude/feat-11-network-mcp-impl-1af11f`, deployed on CT 120 and smoke-checked by the owner (2026-11-07). Hermes compatibility (`mcp` 2.0.0 client against our 2.3 server) works in the SDK's default stateful/SSE mode. Deviation: the startup-order test makes the fake `serve` wait for the off-loop `send`, since the plan sends the link in an executor and the two are concurrent by design.
 - 11: after the smoke the admin page got a live chat filter: typing in the search box hides non-matching rows in the browser (rows carry their normalized title in `data-t`; the Filter button still filters on the server).
+- 14: no brief or plan needed: it was setup only, done and checked as part of 11's smoke with Hermes (2026-11-07).
+- 08, 16: smoke checklists ticked only where the log records a result; the other items are marked "Not rechecked" (2026-11-07).

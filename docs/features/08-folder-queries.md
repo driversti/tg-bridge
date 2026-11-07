@@ -26,7 +26,7 @@ The bridge stays a **pure data provider**: it shapes and shrinks data, but never
 - From LM Studio: both example questions get sensible answers from folder F1.
 
 ## Smoke checklist (manual, real account)
-- [ ] `get_messages(folder="F1", days=7, mode="headlines")` fits in 1–2 pages, and reposts of the same news show as one `×N` line.
-- [ ] The model's "main news this week" answer matches what you remember from the channels.
-- [ ] `search_messages("contract", folder="F1")` (plus the model's own variants) finds the signing news.
-- [ ] A folder with a muted or archived chat behaves the same as in `list_chats(folder=…)`.
+- [x] `get_messages(folder="F1", days=7, mode="headlines")` fits in 1–2 pages, and reposts of the same news show as one `×N` line. (179 posts → 102 headlines, 2 pages; 2 merges after the headline fix.)
+- [ ] The model's "main news this week" answer matches what you remember from the channels. _Not rechecked: only links verified (8 of 8 point to real posts)._
+- [ ] `search_messages("contract", folder="F1")` (plus the model's own variants) finds the signing news. _Not rechecked: only timing logged (1.5 s)._
+- [ ] A folder with a muted or archived chat behaves the same as in `list_chats(folder=…)`. _Not rechecked._

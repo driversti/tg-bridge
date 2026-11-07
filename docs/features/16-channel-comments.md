@@ -33,11 +33,11 @@ Motivating case: collect what people built with AI from the comments under the w
 - Docs updated: tool description, `design.md` §7 tool contract, roadmap row.
 
 ## Smoke checklist (manual, real account)
-- [ ] The model calls `get_comments` on its own for the check-in prompt (no hint from the user).
-- [ ] `get_comments(chat="@imatrofAI", post=3186)` returns comments although the user is **not** a member of the discussion group.
-- [ ] Paging a thread with 100+ comments: no duplicates or gaps across pages.
-- [ ] A post with comments disabled, and one with zero comments, give clear one-line answers.
-- [ ] Links `…/3186?comment=<id>` open the right comment in Telegram.
-- [ ] Author links open the right profile; authors without a username show `(id N)`.
-- [ ] A reply inside the thread shows `↩#<id>` pointing at the right comment.
-- [ ] After a first `FloodWait`-prone burst (10 threads in a row) the tool still answers.
+- [x] The model calls `get_comments` on its own for the check-in prompt (no hint from the user).
+- [ ] `get_comments(chat="@imatrofAI", post=3186)` returns comments although the user is **not** a member of the discussion group. _Not rechecked._
+- [ ] Paging a thread with 100+ comments: no duplicates or gaps across pages. _Not rechecked._
+- [ ] A post with comments disabled, and one with zero comments, give clear one-line answers. _Not rechecked._
+- [ ] Links `…/3186?comment=<id>` open the right comment in Telegram. _Not rechecked._
+- [ ] Author links open the right profile; authors without a username show `(id N)`. _Not rechecked._
+- [ ] A reply inside the thread shows `↩#<id>` pointing at the right comment. _Not rechecked._
+- [ ] After a first `FloodWait`-prone burst (10 threads in a row) the tool still answers. _Not rechecked._
