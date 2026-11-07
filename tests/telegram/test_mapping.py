@@ -707,3 +707,36 @@ def test_plain_username_wins_over_collectible():
     chat = chat_from_dialog(dialog(tl_channel(megagroup=True, username="main", usernames=usernames)))
 
     assert chat.username == "main"
+
+
+def test_new_fields_default_for_plain_entities():
+    chat = chat_from_dialog(dialog(tl_user()))
+
+    assert (chat.is_self, chat.is_creator, chat.photo_id) == (False, False, None)
+
+
+def test_self_dialog_is_saved_messages():
+    chat = chat_from_dialog(dialog(tl_user(is_self=True, first_name="Me", last_name="Owner", username="me_owner")))
+
+    assert chat.kind == "user" and chat.is_self is True
+    assert chat.title == "Saved Messages"
+
+
+def test_creator_flag_for_channel_and_basic_group():
+    assert chat_from_dialog(dialog(tl_channel(megagroup=True, creator=True))).is_creator is True
+    assert chat_from_dialog(dialog(tl_channel(megagroup=True))).is_creator is False
+    group = tl.Chat(id=5, title="Old", photo=tl.ChatPhotoEmpty(), participants_count=3, date=None, version=1, creator=True)
+    assert chat_from_dialog(dialog(group, id=-5)).is_creator is True
+
+
+def test_user_is_never_creator():
+    assert chat_from_dialog(dialog(tl_user())).is_creator is False
+
+
+def test_photo_id_from_real_photos_only():
+    chan = tl_channel(broadcast=True, photo=tl.ChatPhoto(photo_id=555, dc_id=2))
+    assert chat_from_dialog(dialog(chan)).photo_id == 555
+    usr = tl_user(photo=tl.UserProfilePhoto(photo_id=777, dc_id=2))
+    assert chat_from_dialog(dialog(usr)).photo_id == 777
+    assert chat_from_dialog(dialog(tl_channel(broadcast=True))).photo_id is None  # ChatPhotoEmpty
+    assert chat_from_dialog(dialog(tl_user(photo=tl.UserProfilePhotoEmpty()))).photo_id is None

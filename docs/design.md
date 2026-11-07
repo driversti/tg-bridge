@@ -180,9 +180,9 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
 (points to the login script), any other Telegram refusal (its code plus a plain reason, e.g.
 `CHANNEL_PRIVATE`: "the channel … is private, or this account was removed or banned there").
 
-**Scope** (feature 17): `TG_BRIDGE_SCOPE=public` (the default) hides every 1:1 chat, bot and Saved Messages, and
-every private group or channel the owner has not switched on; public channels and supergroups (with a `@username`)
-stay visible. `all` keeps everything visible. A hidden chat does not exist for the model: it is never a resolution
+**Scope** (feature 17): `TG_BRIDGE_SCOPE=public` (the default): public channels and supergroups (with a
+`@username`) are always visible; every other chat (people, bots, Saved Messages, private groups and channels) is hidden
+until the owner switches it on. A person's `@username` never makes a 1:1 chat public. `all` keeps everything visible. A hidden chat does not exist for the model: it is never a resolution
 candidate or suggestion, and asking for it gives the not-found text of a missing chat plus one line saying the bridge
 runs in public scope. Under `public`, `list_chats` ends with the same line.
 
@@ -212,8 +212,11 @@ runs in public scope. Under `public`, `list_chats` ends with the same line.
   It prints a one-time login link with a random token to the terminal; the link sets an HttpOnly, SameSite=Strict
   cookie and every other route needs it. POSTs carry a CSRF token; chat titles (attacker-controlled) are
   HTML-escaped; a CSP forbids anything but the inline style and one nonce'd script; the request log is off because
-  it would contain the token. It reads Telegram (dialogs and small chat photos, kept in memory) only at start and on
-  Refresh, then releases the session. Phone access goes through `tailscale serve`, not through a wider bind.
+  it would contain the token. The page has tabs (Groups, Channels, People, Mine); switching on a person, a bot or
+  Saved Messages asks for confirmation (generic text in the nonce'd script, no chat data in JS) and switched-on 1:1
+  chats are marked "shared with cloud". Small chat photos are cached on disk (`<session stem>.photos/`, dir `700`,
+  files `600`, named by chat id and photo id, so only a changed photo is downloaded again); a second Refresh within
+  10 s is ignored. It reads Telegram only at start and on Refresh, then releases the session. Phone access goes through `tailscale serve`, not through a wider bind.
 
 ## 9. Testing
 

@@ -122,8 +122,8 @@ async def resolve_chat_arg(source: MessageSource, arg: str, settings: Settings) 
 
 
 SCOPE_NOTE = (
-    "This bridge runs in public scope: 1:1 chats, bots and private groups that the owner has not switched on "
-    "are not available."
+    "This bridge runs in public scope: private chats (people, bots, private groups and channels) are available "
+    "only when the owner has switched them on."
 )
 
 

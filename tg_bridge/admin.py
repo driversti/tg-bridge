@@ -1,4 +1,5 @@
-"""`tg-bridge-admin`: an owner-only page to switch private groups and channels on or off for `public` scope.
+"""`tg-bridge-admin`: an owner-only page to switch private chats (groups, channels, people, bots, Saved Messages) on or off
+for `public` scope.
 
 A separate process on purpose: LM Studio starts a fresh stdio server per chat message, so the page cannot live in
 it. It talks to Telegram for a few seconds at start and on Refresh, then lets go of the session.
@@ -13,13 +14,18 @@ import asyncio
 import hmac
 import html
 import logging
+import os
+import re
 import secrets
 import sys
+import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tg_bridge.config import Settings, load_settings
@@ -27,7 +33,7 @@ from tg_bridge.errors import ConfigError, SessionBusyError, TgBridgeError
 from tg_bridge.folders import folder_contains
 from tg_bridge.logging_setup import configure_logging
 from tg_bridge.resolve import normalize
-from tg_bridge.scope import needs_allowlist
+from tg_bridge.scope import is_public, needs_allowlist
 from tg_bridge.source.allowlist import Allowlist, allowlist_path
 from tg_bridge.source.dialog_cache import DialogCache
 from tg_bridge.source.live import LiveSource
@@ -40,41 +46,100 @@ HOST = "127.0.0.1"
 COOKIE_NAME = "tgb_admin"
 MAX_BODY = 16 * 1024
 BUSY_TEXT = "Telegram session is busy (LM Studio is using it); try Refresh in a moment."
+REFRESH_COOLDOWN = 10.0  # seconds; a double click must not fetch twice
+TABS = ("groups", "channels", "people", "mine")
+DEFAULT_TAB = "groups"
+TAB_LABELS = {"groups": "Groups", "channels": "Channels", "people": "People", "mine": "Mine"}
+_USERNAME = re.compile(r"[A-Za-z0-9_]{1,64}")
+
+
+def photo_dir_for(session_path: Path) -> Path:
+    return session_path.with_name(f"{session_path.stem}.photos")
+
+
+def listed_on_page(chat: Chat) -> bool:
+    """Everything private, plus the owner's own public chats (shown as "always on" in Mine)."""
+    return needs_allowlist(chat) or (is_public(chat) and chat.is_creator)
+
+
+def in_tab(chat: Chat, tab: str) -> bool:
+    if tab == "mine":
+        return listed_on_page(chat) and (chat.is_self or chat.is_creator)
+    if tab == "people":
+        return chat.kind in ("user", "bot") and not chat.is_self
+    if not needs_allowlist(chat):
+        return False
+    if tab == "channels":
+        return chat.kind == "channel"
+    return chat.kind in ("group", "supergroup")
 
 
 @dataclass(frozen=True)
 class Snapshot:
     chats: list[Chat]
     folders: list[Folder]
-    photos: dict[int, bytes]  # chat id -> small JPEG, in memory only
     fetched_at: datetime
 
 
-async def fetch_snapshot(settings: Settings) -> Snapshot:
-    """Dialogs, folders and small photos of the chats the page lists; the Telegram connection is closed afterwards."""
+def _photo_file(photo_dir: Path, chat: Chat) -> Path:
+    return photo_dir / f"{chat.id}_{chat.photo_id}.jpg"
+
+
+def _store_photo(photo_dir: Path, chat: Chat, data: bytes) -> None:
+    """Dir 700, file 600, atomic; the chat's older photos go away."""
+    photo_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=photo_dir, prefix=".photo.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        target = _photo_file(photo_dir, chat)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    prefix = f"{chat.id}_"
+    for old in photo_dir.iterdir():
+        if old.name.startswith(prefix) and old.suffix == ".jpg" and old != target:
+            old.unlink(missing_ok=True)
+
+
+async def fetch_snapshot(settings: Settings, photo_dir: Path) -> Snapshot:
+    """Dialogs and folders; small photos of listed chats are downloaded only when missing on disk. The Telegram
+    connection is closed afterwards."""
     telegram = ReadOnlyTelegram(settings)
     cache = DialogCache(settings.session_path.with_name(f"{settings.session_path.stem}.dialogs.json"))
     live = LiveSource(telegram, dialog_cache=cache)
+    downloaded = 0
     try:
         chats = await live.list_dialogs(refresh=True)
         folders = await live.list_folders()
-        photos: dict[int, bytes] = {}
         for chat in chats:
-            if needs_allowlist(chat):
-                data = await telegram.download_chat_photo(chat.id)
-                if data:
-                    photos[chat.id] = data
+            if not listed_on_page(chat) or chat.photo_id is None or _photo_file(photo_dir, chat).exists():
+                continue
+            data = await telegram.download_chat_photo(chat.id)
+            if data:
+                _store_photo(photo_dir, chat, data)
+                downloaded += 1
+                if downloaded % 100 == 0:
+                    log.info("admin photos: %d downloaded so far", downloaded)
     finally:
         await live.close()
-    log.info("admin snapshot: %d dialogs, %d folders, %d photos", len(chats), len(folders), len(photos))
-    return Snapshot(chats, folders, photos, datetime.now().astimezone())
+    log.info("admin snapshot: %d dialogs, %d folders, %d photos downloaded", len(chats), len(folders), downloaded)
+    return Snapshot(chats, folders, datetime.now().astimezone())
 
 
 class AdminApp:
     """State and rendering; the HTTP layer only dispatches. `fetch` is synchronous so tests can inject a snapshot."""
 
     def __init__(
-        self, fetch: Callable[[], Snapshot], allowlist: Allowlist, login_token: str, session_cookie: str, csrf: str
+        self,
+        fetch: Callable[[], Snapshot],
+        allowlist: Allowlist,
+        login_token: str,
+        session_cookie: str,
+        csrf: str,
+        photo_dir: Path | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self._fetch = fetch
         self.allowlist = allowlist
@@ -83,12 +148,22 @@ class AdminApp:
         self.csrf = csrf
         self.snapshot: Snapshot | None = None
         self.notice: str | None = None
+        self.photo_dir = photo_dir
+        self._clock = clock
+        self._last_ok: float | None = None
+
+    def refresh_unless_recent(self) -> None:
+        """The Refresh button: a second press right after a successful fetch is ignored."""
+        if self._last_ok is not None and self._clock() - self._last_ok < REFRESH_COOLDOWN:
+            return
+        self.refresh()
 
     def refresh(self) -> None:
         """Re-fetch; on failure the previous snapshot stays and `notice` says why."""
         try:
             self.snapshot = self._fetch()
             self.notice = None
+            self._last_ok = self._clock()
         except SessionBusyError:
             self.notice = BUSY_TEXT
         except TgBridgeError as e:  # messages of anticipated errors carry no PII
@@ -98,25 +173,42 @@ class AdminApp:
             self.notice = f"Could not fetch chats ({type(e).__name__}). Check the terminal."
 
     def listed(self) -> dict[int, Chat]:
+        return {c.id: c for c in (self.snapshot.chats if self.snapshot else []) if listed_on_page(c)}
+
+    def switchable(self) -> dict[int, Chat]:
         return {c.id: c for c in (self.snapshot.chats if self.snapshot else []) if needs_allowlist(c)}
+
+    def photo_bytes(self, chat_id: int) -> bytes | None:
+        """Only for chats the page lists, and only the file that matches the chat's current photo id."""
+        chat = self.listed().get(chat_id)
+        if chat is None or chat.photo_id is None or self.photo_dir is None:
+            return None
+        try:
+            return _photo_file(self.photo_dir, chat).read_bytes()
+        except OSError:
+            return None
 
     # --- rendering -------------------------------------------------------------
 
-    def render(self, q: str, folder_id: int | None, nonce: str) -> str:
+    def render(self, q: str, folder_id: int | None, nonce: str, tab: str = DEFAULT_TAB) -> str:
+        tab = tab if tab in TABS else DEFAULT_TAB
         snap = self.snapshot
         allowed = self.allowlist.load()
         listed = list(self.listed().values())
+        counts = {t: sum(in_tab(c, t) for c in listed) for t in TABS}
         folders = snap.folders if snap else []
         chosen = next((f for f in folders if f.id == folder_id), None)
-        shown = listed
+        in_current = [c for c in listed if in_tab(c, tab)]
+        shown = in_current
         if chosen is not None:
             shown = [c for c in shown if folder_contains(chosen, c)]
         needle = normalize(q)
         if needle:
             shown = [c for c in shown if needle in normalize(c.title)]
-        shown.sort(key=lambda c: (c.id not in allowed, c.title.casefold()))
-        on_count = sum(c.id in allowed for c in listed)
-        keep = {k: v for k, v in (("q", q), ("folder", str(chosen.id) if chosen else "")) if v}
+        shown.sort(key=lambda c: (not (c.id in allowed or is_public(c)), c.title.casefold()))
+        on_count = sum(c.id in allowed for c in in_current)
+        filters = {k: v for k, v in (("q", q), ("folder", str(chosen.id) if chosen else "")) if v}
+        keep = {"tab": tab, **filters}
 
         parts = [
             "<!doctype html><html lang=en><head><meta charset=utf-8>",
@@ -127,16 +219,17 @@ class AdminApp:
         ]
         if self.notice:
             parts.append(f'<p class="notice">{html.escape(self.notice)}</p>')
+        parts.append(_tabs_nav(tab, counts, filters))
         if snap is not None:
             parts.append(
-                f'<p class="meta">{len(listed)} private chats · {on_count} on · '
+                f'<p class="meta">{len(in_current)} chats here · {on_count} on · '
                 f"fetched {html.escape(snap.fetched_at.strftime('%Y-%m-%d %H:%M'))}</p>"
             )
         parts.append(self._toolbar(q, chosen, folders, keep))
         for chat in shown:
-            parts.append(self._row(chat, chat.id in allowed, snap, keep))
+            parts.append(self._row(chat, chat.id in allowed, keep))
         if snap is not None and not shown:
-            parts.append('<p class="meta">No private chats match.</p>')
+            parts.append('<p class="meta">No chats match.</p>')
         parts.append(f'<script nonce="{nonce}">{_JS}</script></main></body></html>')
         return "".join(parts)
 
@@ -149,38 +242,61 @@ class AdminApp:
         return (
             '<form class="bar" method="get" action="/">'
             f'<input type="search" name="q" placeholder="Search by title" value="{html.escape(q, quote=True)}">'
-            f'<select name="folder">{"".join(options)}</select><button type="submit">Filter</button></form>'
-            '<form method="post" action="/refresh">'
+            f'<select name="folder">{"".join(options)}</select>'
+            f'<input type="hidden" name="tab" value="{html.escape(keep["tab"], quote=True)}">'
+            '<button type="submit">Filter</button></form>'
+            '<form method="post" action="/refresh" data-refresh="1">'
             f'<input type="hidden" name="csrf" value="{html.escape(self.csrf)}">{_hidden(keep)}'
             '<button type="submit">Refresh from Telegram</button></form>'
         )
 
-    def _row(self, chat: Chat, on: bool, snap: Snapshot | None, keep: dict[str, str]) -> str:
+    def _row(self, chat: Chat, on: bool, keep: dict[str, str]) -> str:
         title = html.escape(chat.title)
-        if snap is not None and chat.id in snap.photos:
+        if self.photo_bytes(chat.id) is not None:
             icon = f'<img class="avatar" src="/photo/{chat.id}" alt="" width=40 height=40>'
         else:
             letter = html.escape((chat.title.strip() or "?")[0].upper())
             icon = f'<div class="avatar">{letter}</div>'
         kind = "forum" if chat.is_forum else chat.kind
+        always = is_public(chat)
+        shared = on and chat.kind in ("user", "bot")
         tags = f'<span class="tag">{kind}</span>' + ('<span class="tag">archived</span>' if chat.is_archived else "")
-        link = _tme_link(chat.id)
+        if shared:
+            tags += '<span class="tag shared">shared with cloud</span>'
+        link = _tme_link(chat)
         link_html = (
             f'<button type="button" class="copy" data-link="{html.escape(link, quote=True)}">Copy link</button>'
             if link
             else '<span class="meta">no link</span>'
         )
-        switch = (
-            '<form method="post" action="/toggle">'
-            f'<input type="hidden" name="csrf" value="{html.escape(self.csrf)}">'
-            f'<input type="hidden" name="chat_id" value="{chat.id}">'
-            f'<input type="hidden" name="on" value="{0 if on else 1}">{_hidden(keep)}'
-            f'<button type="submit" class="switch {"on" if on else "off"}">{"On" if on else "Off"}</button></form>'
-        )
+        if always:
+            switch = '<span class="tag">always on</span>'
+        else:
+            confirm = ' data-confirm="1"' if chat.kind in ("user", "bot") and not on else ""
+            switch = (
+                '<form method="post" action="/toggle">'
+                f'<input type="hidden" name="csrf" value="{html.escape(self.csrf)}">'
+                f'<input type="hidden" name="chat_id" value="{chat.id}">'
+                f'<input type="hidden" name="on" value="{0 if on else 1}">{_hidden(keep)}'
+                f'<button type="submit"{confirm} class="switch {"on" if on else "off"}">{"On" if on else "Off"}</button></form>'
+            )
+        cls = "row shared" if shared else "row"
         return (
-            f'<div class="row">{icon}<div class="body"><div class="title">{title}</div>'
+            f'<div class="{cls}">{icon}<div class="body"><div class="title">{title}</div>'
             f"<div>{tags} {link_html}</div></div>{switch}</div>"
         )
+
+
+def _tabs_nav(current: str, counts: dict[str, int], filters: dict[str, str]) -> str:
+    items = []
+    for t in TABS:
+        label = f"{TAB_LABELS[t]} {counts[t]}"
+        if t == current:
+            items.append(f'<strong aria-current="page">{label}</strong>')
+        else:
+            href = html.escape("/?" + urlencode({"tab": t, **filters}), quote=True)
+            items.append(f'<a href="{href}">{label}</a>')
+    return '<nav class="tabs">' + " · ".join(items) + "</nav>"
 
 
 def _hidden(fields: dict[str, str]) -> str:
@@ -189,9 +305,13 @@ def _hidden(fields: dict[str, str]) -> str:
     )
 
 
-def _tme_link(chat_id: int) -> str | None:
-    """`-100N` ids (supergroups, channels) have a t.me/c/N link; basic groups have none."""
-    text = str(chat_id)
+def _tme_link(chat: Chat) -> str | None:
+    """`-100N` ids (supergroups, channels) have a t.me/c/N link; people and bots a t.me/<username> one."""
+    if chat.kind in ("user", "bot"):
+        if not chat.is_self and chat.username and _USERNAME.fullmatch(chat.username):
+            return f"https://t.me/{chat.username}"
+        return None
+    text = str(chat.id)
     return f"https://t.me/c/{text[4:]}" if text.startswith("-100") and len(text) > 4 else None
 
 
@@ -208,10 +328,19 @@ _CSS = (
     "align-items:center;justify-content:center;font-weight:600}.body{flex:1;min-width:0}"
     ".title{overflow-wrap:anywhere;font-weight:600}.tag{display:inline-block;margin-right:6px;padding:0 8px;"
     "border-radius:999px;border:1px solid var(--line);font-size:.8rem;color:var(--mut)}"
+    ".tabs{display:flex;flex-wrap:wrap;gap:4px 8px;margin:8px 0}.tabs a{color:var(--acc)}"
+    ".row.shared{border-left:4px solid var(--acc);padding-left:8px}.tag.shared{color:var(--acc);border-color:var(--acc)}"
     ".copy{padding:2px 8px;font-size:.8rem}.switch{min-width:64px}.switch.on{background:var(--ok);color:#fff;border-color:var(--ok)}"
 )
-# No user data in script: the copy button carries only the link, in a data attribute.
-_JS = "document.addEventListener('click',function(e){var b=e.target.closest('[data-link]');if(b){navigator.clipboard.writeText(b.dataset.link)}})"
+# No chat data in script: the copy button carries only the link, in a data attribute; the texts are generic.
+_JS = (
+    "document.addEventListener('click',function(e){var b=e.target.closest('[data-link]');"
+    "if(b){navigator.clipboard.writeText(b.dataset.link)}});"
+    "document.addEventListener('submit',function(e){var f=e.target;"
+    "if(f.querySelector('[data-confirm]')&&!confirm('The cloud model will be able to read this whole conversation. "
+    "Switch it on?')){e.preventDefault();return}"
+    "if(f.dataset.refresh){var b=f.querySelector('button');b.disabled=true;b.textContent='Refreshing\\u2026'}})"
+)
 
 
 def make_server(app: AdminApp, port: int) -> HTTPServer:
@@ -275,7 +404,7 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
 
         @staticmethod
         def _back(form: dict[str, str]) -> str:
-            keep = {k: form[k] for k in ("q", "folder") if form.get(k)}
+            keep = {k: form[k] for k in ("tab", "q", "folder") if form.get(k)}
             return "/?" + urlencode(keep) if keep else "/"
 
         # --- routes
@@ -294,7 +423,7 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
                 folder = query.get("folder", "")
                 folder_id = int(folder) if folder.isascii() and folder.isdigit() else None
                 nonce = secrets.token_urlsafe(16)
-                page = app.render(query.get("q", ""), folder_id, nonce)
+                page = app.render(query.get("q", ""), folder_id, nonce, query.get("tab", DEFAULT_TAB))
                 return self._send(200, page.encode(), "text/html; charset=utf-8", nonce=nonce)
             if url.path.startswith("/photo/"):
                 return self._photo(url.path.removeprefix("/photo/"))
@@ -305,8 +434,8 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
                 chat_id = int(raw_id)
             except ValueError:
                 return self._text(404, "Not found.")
-            data = app.snapshot.photos.get(chat_id) if app.snapshot else None
-            if data is None or chat_id not in app.listed():
+            data = app.photo_bytes(chat_id)
+            if data is None:
                 return self._text(404, "Not found.")
             self._send(200, data, "image/jpeg")
 
@@ -322,14 +451,14 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
             if not self._csrf_ok(form):
                 return self._text(403, "Bad CSRF token: reload the page.")
             if path == "/refresh":
-                app.refresh()
+                app.refresh_unless_recent()
                 return self._redirect(self._back(form))
             try:
                 chat_id = int(form.get("chat_id", ""))
             except ValueError:
                 return self._text(400, "Bad chat id.")
             on = form.get("on")
-            if on not in ("0", "1") or chat_id not in app.listed():
+            if on not in ("0", "1") or chat_id not in app.switchable():
                 return self._text(400, "Bad request.")
             app.allowlist.set(chat_id, on == "1")
             log.info("chat %d switched %s", chat_id, "on" if on == "1" else "off")
@@ -346,12 +475,14 @@ def main() -> None:
         print(f"tg-bridge-admin: {e}", file=sys.stderr)
         sys.exit(2)
 
+    photo_dir = photo_dir_for(settings.session_path)
     app = AdminApp(
-        lambda: asyncio.run(fetch_snapshot(settings)),
+        lambda: asyncio.run(fetch_snapshot(settings, photo_dir)),
         Allowlist(allowlist_path(settings.session_path)),
         login_token=secrets.token_urlsafe(32),
         session_cookie=secrets.token_urlsafe(32),
         csrf=secrets.token_urlsafe(32),
+        photo_dir=photo_dir,
     )
     app.refresh()
     if app.notice:

@@ -41,6 +41,9 @@ class Chat:
     is_muted: bool = False
     is_unread: bool = False
     has_unread_mention: bool = False
+    is_self: bool = False  # the Saved Messages dialog
+    is_creator: bool = False  # the owner created this group/channel; always False for users
+    photo_id: int | None = None  # changes when the profile photo does; lets the admin page cache icons
 
     @property
     def deleted_peer(self) -> bool:

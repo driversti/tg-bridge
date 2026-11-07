@@ -16,7 +16,10 @@ from tg_bridge.source import Post, SearchOffset
 from tg_bridge.source.allowlist import Allowlist
 from tg_bridge.source.scoped import ScopedSource
 
-NOTE = "This bridge runs in public scope: 1:1 chats, bots and private groups that the owner has not switched on are not available."
+NOTE = (
+    "This bridge runs in public scope: private chats (people, bots, private groups and channels) are available "
+    "only when the owner has switched them on."
+)
 T0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 NOW = lambda: datetime(2026, 9, 20, 12, 0, tzinfo=UTC)  # noqa: E731
 
@@ -228,3 +231,15 @@ async def test_scope_note_stays_within_budget(tmp_path):
     with pytest.raises(ToolError) as e:
         await tools.get_chat_info(src, s, "Public channel numbr")  # not found, close matches → suggestion list
     assert NOTE in str(e.value) and len(str(e.value)) <= 500
+
+
+async def test_switched_on_dm_is_readable_and_a_second_dm_stays_hidden(inner, settings, tmp_path):
+    allow = Allowlist(tmp_path / "dm.json")
+    allow.set(DM.id, True)
+    src = ScopedSource(inner, allow)
+    out = await tools.get_messages(src, settings, chat="Anna", since="2026-01-01", now=NOW)
+    assert "other" in out
+    with pytest.raises(ToolError) as e:
+        await tools.get_messages(src, settings, chat="Helper", since="2026-01-01", now=NOW)
+    assert str(e.value).startswith('No chat matches "Helper".')
+    assert "helper_bot" not in (await tools.list_chats(src, settings))

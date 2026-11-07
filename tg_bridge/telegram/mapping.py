@@ -34,10 +34,14 @@ def chat_from_dialog(
     entity = dialog.entity
     peer: Person | None = None
     forum = False
+    is_self = False
     if isinstance(entity, tl.User):
         peer = person_from_user(entity)
         kind: ChatKind = "bot" if peer.is_bot else "user"
         title, username = peer.display_name, peer.username
+        if getattr(entity, "is_self", False):
+            is_self = True
+            title = "Saved Messages"  # Telethon would show the owner's own name
     elif isinstance(entity, (tl.Channel, tl.ChannelForbidden)):
         kind = "channel" if entity.broadcast else "supergroup"
         title, username = entity.title, _channel_username(entity)
@@ -68,7 +72,17 @@ def chat_from_dialog(
         is_muted=_is_muted(mute_until, now),
         is_unread=unread,
         has_unread_mention=mentions > 0,
+        is_self=is_self,
+        is_creator=False if isinstance(entity, tl.User) else bool(getattr(entity, "creator", False)),
+        photo_id=_photo_id(entity),
     )
+
+
+def _photo_id(entity) -> int | None:
+    photo = getattr(entity, "photo", None)
+    if isinstance(photo, (tl.ChatPhoto, tl.UserProfilePhoto)):
+        return photo.photo_id
+    return None
 
 
 def _channel_username(entity) -> str | None:
