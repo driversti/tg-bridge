@@ -129,6 +129,18 @@ class Message:
     topic_id: int | None
     media: MediaInfo | None
     action: str | None  # short service-message label, e.g. "joined", "pinned #4807"
+    sender_username: str | None = None  # public @username of a channel that sent this (e.g. commenting as its channel)
+    comment_count: int | None = None  # channel posts with a comment thread only; None = no comments possible
+
+
+@dataclass(frozen=True)
+class Post:
+    """A channel post plus what is known about its comment thread."""
+
+    message: Message  # the channel post itself
+    comments_enabled: bool  # replies is MessageReplies with comments=True
+    comment_count: int | None  # replies.replies; None when comments are off
+    discussion_id: int | None  # marked id of the discussion supergroup (-100N); None when comments are off
 
 
 @dataclass(frozen=True)

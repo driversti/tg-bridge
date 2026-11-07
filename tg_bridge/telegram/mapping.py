@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from telethon import helpers, utils
 from telethon.tl import types as tl
 
-from tg_bridge.source import Chat, ChatKind, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Topic
+from tg_bridge.source import Chat, ChatKind, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Post, Topic
 
 log = logging.getLogger(__name__)
 
@@ -162,13 +162,21 @@ def message_from_tl(msg, chat_id: int) -> Message | None:
     sender = getattr(msg, "sender", None)
     person: Person | None = None
     title: str | None = getattr(msg, "post_author", None) or None
+    username: str | None = None
     if isinstance(sender, tl.User):
         person = person_from_user(sender)
         title = None
     elif title is None and sender is not None:
         title = getattr(sender, "title", None)
+        # A channel speaking for itself (e.g. a blogger commenting as their channel) is an author with a public link;
+        # an anonymous group admin is not, so groups keep none.
+        if isinstance(sender, tl.Channel) and sender.broadcast:
+            username = sender.username or None
     topic_id, reply_to_id = _topic_and_reply(msg.reply_to)
     is_service = isinstance(msg, tl.MessageService)
+    replies = getattr(msg, "replies", None)
+    # Group-style reply counters (comments=False) are not a comment thread get_comments could read.
+    comments = replies.replies if isinstance(replies, tl.MessageReplies) and replies.comments else None
     return Message(
         id=msg.id,
         chat_id=chat_id,
@@ -183,6 +191,40 @@ def message_from_tl(msg, chat_id: int) -> Message | None:
         topic_id=topic_id,
         media=None if is_service else _media(msg),
         action=_action(msg) if is_service else None,
+        sender_username=username,
+        comment_count=comments,
+    )
+
+
+def comment_from_tl(msg, chat_id: int) -> Message | None:
+    """A message of a channel post's comment thread; `chat_id` is the discussion group's marked id.
+
+    A top-level comment is technically a reply to the post's copy in the discussion group (the thread root), so
+    it carries no reply of its own; only a reply to another comment (reply_to_top_id set, target != root) keeps it.
+    """
+    mapped = message_from_tl(msg, chat_id)
+    if mapped is None:
+        return None
+    header = msg.reply_to if isinstance(msg.reply_to, tl.MessageReplyHeader) else None
+    top = None if header is None else header.reply_to_top_id
+    # No top id, or a reply aimed at the root itself: a top-level comment.
+    reply = None if top is None or header.reply_to_msg_id == top else header.reply_to_msg_id
+    return dataclasses.replace(mapped, reply_to_id=reply, topic_id=None)
+
+
+def post_from_tl(msg, chat_id: int) -> Post | None:
+    """None for MessageEmpty and service messages (they have no comment thread)."""
+    if isinstance(msg, (tl.MessageEmpty, tl.MessageService)):
+        return None
+    mapped = message_from_tl(msg, chat_id)
+    replies = getattr(msg, "replies", None)
+    if not isinstance(replies, tl.MessageReplies) or not replies.comments or replies.channel_id is None:
+        return Post(mapped, comments_enabled=False, comment_count=None, discussion_id=None)
+    return Post(
+        mapped,
+        comments_enabled=True,
+        comment_count=replies.replies,
+        discussion_id=utils.get_peer_id(tl.PeerChannel(replies.channel_id)),
     )
 
 

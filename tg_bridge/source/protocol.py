@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, Post, SearchQuery
 
 
 class MessageSource(Protocol):
@@ -29,6 +29,15 @@ class MessageSource(Protocol):
 
     async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
         """At most `query.limit` messages of one resolved chat, in the query's direction (forward = ascending ids)."""
+        ...
+
+    async def get_post(self, chat: Chat, post_id: int) -> Post | None:
+        """A channel post with its comment-thread info; None for an unknown id or a service message."""
+        ...
+
+    async def get_comments(self, chat: Chat, post: Post, query: MessageQuery) -> list[Message]:
+        """At most `query.limit` comments of `post`, oldest first (forward only), period and id boundary applied.
+        Comments carry the discussion group's chat id. Raises TelegramRefusedError when Telegram refuses."""
         ...
 
     async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:

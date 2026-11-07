@@ -280,3 +280,53 @@ def test_is_read_cursor():
     assert not is_read_cursor("f6782037_c795")
     assert not is_read_cursor("garbage")
     assert is_read_cursor(' "r12_d1_u5" ')
+
+
+# --- comments cursor ------------------------------------------------------
+
+CHANNEL = -1001234567890
+
+
+def comments_cursor(**overrides) -> Cursor:
+    fields = dict(
+        chat_id=CHANNEL, direction="forward", boundary_id=5040, start=None, end=None, topic_id=None, from_me=False,
+        post_id=3186,
+    )
+    fields.update(overrides)
+    return Cursor(**fields)
+
+
+def test_post_id_round_trip_and_format():
+    assert encode_cursor(comments_cursor()) == "f5040_p3186_c890"
+    assert decode_cursor("f5040_p3186_c890", CHANNEL) == comments_cursor()
+
+
+def test_post_id_with_period():
+    c = comments_cursor(start=START, end=END)
+
+    token = encode_cursor(c)
+
+    assert token == f"f5040_s{int(START.timestamp())}_e{int(END.timestamp())}_p3186_c890"
+    assert decode_cursor(token, CHANNEL) == c
+
+
+def test_old_tokens_have_no_post_id():
+    assert decode_cursor("f5040_c890", CHANNEL).post_id is None
+    assert full().post_id is None
+
+
+def test_repeated_post_id_is_invalid():
+    with pytest.raises(CursorError):
+        decode_cursor("f5040_p3186_p3187_c890", CHANNEL)
+
+
+def test_topic_and_post_id_together_are_invalid():
+    with pytest.raises(CursorError):
+        decode_cursor("f5040_t12_p3186_c890", CHANNEL)
+
+
+def test_other_post_error_text():
+    assert str(CursorError(other_post=True)) == (
+        "This cursor belongs to another post's comments. Use the cursor from this thread's last result, "
+        "or call get_messages again without cursor."
+    )

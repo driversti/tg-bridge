@@ -28,6 +28,7 @@ pre-plan future features here.
 | 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) · [plan](plans/07-folders.md) | 01 | [x] |
 | 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) · [plan](plans/08-folder-queries.md) | 07, 03 | [x] |
 | 09 | Time awareness: "Now" line in results, `now()`, `this_week`/`last_month`/… keywords | [features/09-time-awareness.md](features/09-time-awareness.md) · [plan](plans/09-time-awareness.md) | 02 | [x] |
+| 16 | Channel post comments: `get_comments(chat, post)` via `GetReplies`, no discussion-group membership needed; `💬N` on post lines | [features/16-channel-comments.md](features/16-channel-comments.md) · [plan](plans/16-channel-comments.md) | 02 | [x] |
 
 Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from LM Studio.
 
@@ -59,3 +60,6 @@ _(deviations from design, one line each)_
 - 08: the model did not fill `Links: …/<id>` into post links, so headline lines end with full post links (`#id` only for chats without links); recheck: 8 of 8 news items in the answer linked to real posts.
 - 09: LM Studio does not pass the MCP server `instructions` to the model (smoke 2026-10-28: asked without tools, it answered "[current date]" and could not quote them), so the date reaches the model only via the `Now:` line and `now()`. Also beyond the brief: `last_year` keyword, `TG_BRIDGE_MAX_CHARS` ≥ 500.
 - 09 (after 08's smoke): for "last 7 days"/"останній місяць" the model picked calendar `last_week`/`last_month`. Keywords are documented as `previous_week/month/year` (`last_*` kept as hidden aliases) and docstrings map rolling periods to `days`; recheck: days=7, days=30 (once after a first previous_month try), "минулого тижня" → previous_week.
+- 16: first smoke failed on every tool with `database is locked`: tg-bridge was also a local MCP server in Claude Code, and its long-lived processes held the Telethon session's write lock. Removed it from Claude Code (never run two bridges on one session file); the error now reads as `SessionBusyError`.
+- 16: a ~26B model (gemma-4-26b) never found `get_messages(comments_of=…)` at the end of a long docstring and said it cannot read comments. Comments became their own tool `get_comments`, and channel post lines show `💬N` plus one ready `get_comments` call per page; recheck: the model called `get_comments` on its own.
+- 16: Telegram refusals (`RPCError`) carry a plain reason instead of a generic tool error; for comments the text says to skip the post and go on, so one refused thread does not end a series.

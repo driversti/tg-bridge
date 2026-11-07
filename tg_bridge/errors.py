@@ -70,16 +70,57 @@ class PeriodError(TgBridgeError):
     """The period arguments of a read tool are invalid. The message tells the model how to fix them."""
 
 
+# Telegram error codes a read can hit, in words a model can act on. Codes only: they never carry PII.
+_REFUSAL_REASONS = {
+    "CHANNEL_PRIVATE": "the channel or its discussion group is private, or this account was removed or banned there",
+    "CHANNEL_INVALID": "this account cannot open the channel (it left, the channel is gone, or the id is stale)",
+    "PEER_ID_INVALID": "this account cannot open that chat (it left, the chat is gone, or the id is stale)",
+    "CHAT_ADMIN_REQUIRED": "only admins can see this",
+    "CHAT_FORBIDDEN": "this account has no access to that chat",
+    "MSG_ID_INVALID": "Telegram does not know this message id there (deleted, or older than the linked discussion group)",
+    "USER_BANNED_IN_CHANNEL": "this account is banned there",
+}
+
+
+class SessionBusyError(TgBridgeError):
+    """Another process holds the Telethon SQLite session's write lock."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The Telegram session file is busy: another tg-bridge process is using it (e.g. Claude Code and "
+            "LM Studio at the same time). Close the other app's tg-bridge, then retry."
+        )
+
+
+class TelegramRefusedError(TgBridgeError):
+    """Telegram answered a read with an error (not a rate limit). `code` is Telegram's own, e.g. CHANNEL_PRIVATE."""
+
+    def __init__(self, code: str):
+        self.code = code
+        self.reason = _REFUSAL_REASONS.get(code, "Telegram did not say why")
+        super().__init__(f"Telegram refused the request: {self.reason} ({code}).")
+
+
 class CursorError(TgBridgeError):
     """The paging cursor is garbled, from another version, or otherwise unusable."""
 
     def __init__(
-        self, other_chat: bool = False, other_query: bool = False, tool: str = "get_messages", other_folder: bool = False
+        self,
+        other_chat: bool = False,
+        other_query: bool = False,
+        tool: str = "get_messages",
+        other_folder: bool = False,
+        other_post: bool = False,
     ) -> None:
         # Models mix up cursors between chats and queries; naming the mistake lets them fix it instead of starting over.
         if other_chat:
             super().__init__(
                 f"This cursor belongs to another chat. Use the cursor from this chat's last result, "
+                f"or call {tool} again without cursor."
+            )
+        elif other_post:
+            super().__init__(
+                f"This cursor belongs to another post's comments. Use the cursor from this thread's last result, "
                 f"or call {tool} again without cursor."
             )
         elif other_folder:
@@ -97,6 +138,7 @@ class CursorError(TgBridgeError):
         self.other_chat = other_chat
         self.other_query = other_query
         self.other_folder = other_folder
+        self.other_post = other_post
 
 
 class TooManyMessagesError(TgBridgeError):

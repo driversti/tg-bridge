@@ -31,6 +31,7 @@ from tg_bridge.errors import (
     MediaError,
     MessageNotFoundError,
     NotLoggedInError,
+    TelegramRefusedError,
     TgBridgeError,
 )
 from tg_bridge.export import ExportResult, export_chat_file, period_text, when_text
@@ -40,6 +41,8 @@ from tg_bridge.format import (
     ambiguous_text,
     chat_info_block,
     chat_line,
+    comment_line_of,
+    comments_head,
     folder_ambiguous_text,
     folder_label,
     folder_not_found_text,
@@ -282,6 +285,12 @@ async def get_messages(
     resolved = await resolve_chat_arg(source, chat, settings)
     has_cursor = cursor is not None and bool(cursor.strip())
     around_mode = around is not None and not has_cursor  # a cursor continues a page; it wins over `around`
+    if has_cursor and (post_id := _cursor_post_id(cursor, resolved.id)) is not None:
+        # Models reuse the tool they just called; point them at the right one instead of guessing.
+        raise ToolError(
+            f'This cursor pages the comments of post #{post_id}. '
+            f'Call get_comments(chat="{resolved.id}", cursor="{cursor.strip()}").'
+        )
     if limit is None:
         limit = AROUND_LIMIT if around_mode else DEFAULT_MESSAGES
     limit = max(MIN_MESSAGES, min(MAX_MESSAGES, limit))
@@ -332,6 +341,115 @@ async def get_messages(
         next_hint=next_hint,
         end_text="End of period." if forward else "No older messages.",
         empty_text="No messages in this period." if forward else "No messages.",
+    )
+
+
+async def get_comments(
+    source: MessageSource,
+    settings: Settings,
+    chat: str | None,
+    post: int | None = None,
+    *,
+    days: int | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    period: str | None = None,
+    cursor: str | None = None,
+    limit: int | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> str:
+    """The comment thread under one channel post. A cursor carries the post id, so `post` may be left out with it."""
+    chat = (chat or "").strip() or None
+    cursor = cursor.strip() if cursor is not None and cursor.strip() else None
+    if chat is None:
+        raise ToolError("get_comments needs chat: the channel the post belongs to.")
+    if cursor is not None and is_read_cursor(cursor):
+        raise ToolError(str(CursorError(other_post=True, tool="get_comments")))
+    if post is None and cursor is None:
+        raise ToolError("Pass post: the #id of the channel post (from get_messages or search_messages on this channel).")
+    resolved = await resolve_chat_arg(source, chat, settings)
+    return await _read_comments(
+        source, settings, resolved, post, days=days, since=since, until=until, period=period, cursor=cursor,
+        limit=limit, now=now,
+    )
+
+
+def _cursor_post_id(cursor: str, chat_id: int) -> int | None:
+    """The post a plain cursor pages the comments of, None for a channel-history cursor."""
+    with _tool_errors():
+        return decode_cursor(cursor, chat_id).post_id
+
+
+async def _read_comments(
+    source: MessageSource,
+    settings: Settings,
+    channel: Chat,
+    post_id: int | None,
+    *,
+    days: int | None,
+    since: str | None,
+    until: str | None,
+    period: str | None,
+    cursor: str | None,
+    limit: int | None,
+    now: Callable[[], datetime],
+) -> str:
+    """One channel post's comment thread, oldest first. The cursor carries the post id, so it resumes alone."""
+    tz = settings.timezone
+    limit = max(MIN_MESSAGES, min(MAX_MESSAGES, DEFAULT_MESSAGES if limit is None else limit))
+    if channel.kind != "channel":
+        raise ToolError(
+            f'get_comments works only with channels. "{one_line(channel.title)}" is a {channel.kind}: '
+            "its replies are ordinary messages, read them with get_messages."
+        )
+    with _tool_errors():
+        boundary_id = None
+        if cursor is not None:
+            c = decode_cursor(cursor, channel.id, tool="get_comments")
+            if c.post_id is None or (post_id is not None and post_id != c.post_id):
+                raise CursorError(other_post=True, tool="get_comments")
+            post_id, span, boundary_id = c.post_id, Period(c.start, c.end), c.boundary_id
+        else:
+            span = parse_period(days, since, until, tz, now(), period)
+        try:
+            post = await source.get_post(channel, post_id)
+            title = one_line(channel.title)
+            if post is None:
+                raise ToolError(
+                    f'Post #{post_id} not found in "{title}". '
+                    "Take post ids from get_messages or search_messages on this channel."
+                )
+            if not post.comments_enabled:
+                raise ToolError(f"Post #{post_id} has no comments: comments are off for this channel or this post.")
+            query = MessageQuery(
+                direction="forward", start=span.start, end=span.end, boundary_id=boundary_id, topic_id=None,
+                from_me=False, limit=limit + 1,  # the extra one only tells us whether more exist
+            )
+            fetched = await source.get_comments(channel, post, query)
+        except TelegramRefusedError as e:
+            # In a series of threads one refused post should not end the whole run.
+            raise ToolError(
+                f"Telegram refused the comments of post #{post_id}: {e.reason} ({e.code}). "
+                "Skip this post and go on with the next one."
+            ) from e
+    bounded = span.start is not None or span.end is not None
+
+    def next_hint(last: Message) -> str:
+        token = encode_cursor(Cursor(channel.id, "forward", last.id, span.start, span.end, None, False, post_id))
+        return f'More comments remain. Next: call get_comments(chat="{channel.id}", cursor="{token}")'
+
+    return render_page(
+        comments_head(channel, post, describe_period(span, tz) if bounded else None, tz),
+        fetched[:limit],
+        tz=tz,
+        max_chars=settings.max_chars,
+        keep="oldest",
+        more=len(fetched) > limit,
+        next_hint=next_hint,
+        end_text=f"End of comments on post #{post_id}.",
+        empty_text="No comments in this period." if bounded else f"No comments on post #{post_id}.",
+        line_of=comment_line_of(channel, post_id),
+        noun="comment",
     )
 
 

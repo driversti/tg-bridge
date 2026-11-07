@@ -6,6 +6,8 @@ the MCP transport owns), never sends read receipts or status updates.
 
 import itertools
 import logging
+import re
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
@@ -17,7 +19,13 @@ from telethon.tl import functions
 from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
-from tg_bridge.errors import MessageNotFoundError, NotLoggedInError, RateLimitedError
+from tg_bridge.errors import (
+    MessageNotFoundError,
+    NotLoggedInError,
+    RateLimitedError,
+    SessionBusyError,
+    TelegramRefusedError,
+)
 from tg_bridge.source import (
     MEDIA_CHUNK,
     Chat,
@@ -27,6 +35,7 @@ from tg_bridge.source import (
     Message,
     MessageQuery,
     Person,
+    Post,
     SearchOffset,
     SearchQuery,
     Topic,
@@ -34,11 +43,13 @@ from tg_bridge.source import (
 from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import (
     chat_from_dialog,
+    comment_from_tl,
     folder_from_tl,
     largest_photo_size,
     media_file_from_tl,
     message_from_tl,
     person_from_user,
+    post_from_tl,
     topic_from_forum_topic,
 )
 
@@ -120,9 +131,9 @@ class ReadOnlyTelegram:
                 settings = await self._call(
                     lambda peer=peer: client(functions.account.GetNotifySettingsRequest(peer))
                 )
-            except (RPCError, RateLimitedError) as e:
+            except (TelegramRefusedError, RateLimitedError) as e:
                 # Only the "muted" flag of chats without an own setting depends on it; not worth failing the list.
-                log.warning("notify defaults unavailable for %s: %s", category, type(e).__name__)
+                log.warning("notify defaults unavailable for %s: %s", category, _error_name(e))
                 continue
             defaults[category] = settings.mute_until
         return defaults
@@ -160,9 +171,9 @@ class ReadOnlyTelegram:
                 members = getattr(full.full_chat, "participants_count", None)
                 if chat.is_forum:
                     topics, topics_total = await self._forum_topics(client, entity)
-        except RPCError as e:
+        except TelegramRefusedError as e:
             # E.g. ChannelPrivateError for a chat we were removed from: the dialog data is still worth showing.
-            log.warning("chat details unavailable for %d: %s", chat.id, type(e).__name__)
+            log.warning("chat details unavailable for %d: %s", chat.id, _error_name(e))
             description, members, topics, topics_total = None, None, [], None
         return ChatInfo(
             chat=chat,
@@ -230,6 +241,52 @@ class ReadOnlyTelegram:
             "read %d messages from %d (%s) in %.2f s", len(messages), chat.id, query.direction, time.monotonic() - started
         )
         return messages
+
+    async def get_post(self, chat: Chat, post_id: int) -> Post | None:
+        """One channel post with its comment-thread info; None for an unknown id or a service message."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        raw = await self._fetch_message(client, entity, post_id)
+        return None if raw is None else post_from_tl(raw, chat.id)
+
+    async def get_comments(self, chat: Chat, post: Post, query: MessageQuery) -> list[Message]:
+        """At most query.limit comments of `post`, oldest first (messages.GetReplies: no membership needed).
+        Comments carry the discussion group's chat id."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        post_id = post.message.id
+        kwargs: dict[str, Any] = {
+            "limit": None,  # stopped by hand: end date and query.limit
+            "reverse": True,
+            "reply_to": post_id,
+            "offset_date": query.start,
+            "offset_id": query.boundary_id or 0,  # "ids greater than"; takes priority over offset_date
+        }
+        _no_page_sleeps(kwargs, query.limit)
+        started = time.monotonic()
+
+        async def collect() -> list[Message]:
+            found: list[Message] = []
+            if query.limit <= 0:
+                return found
+            async for raw in client.iter_messages(entity, **kwargs):
+                msg = comment_from_tl(raw, post.discussion_id)
+                if msg is None:
+                    continue
+                if query.end is not None and msg.date >= query.end:
+                    break
+                if query.start is not None and msg.date < query.start:
+                    continue
+                found.append(msg)
+                if len(found) >= query.limit:
+                    break
+            return found
+
+        comments = await self._call(collect)
+        log.info(
+            "read %d comments of post %d in %d in %.2f s", len(comments), post_id, chat.id, time.monotonic() - started
+        )
+        return comments
 
     async def search(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         """At most query.limit text hits, newest first: one chat via messages.Search, all dialogs via
@@ -379,6 +436,10 @@ class ReadOnlyTelegram:
             seconds = int(getattr(e, "seconds", 0) or 0)
             log.warning("telegram flood wait: %d s", seconds)
             raise RateLimitedError(seconds) from e
+        except RPCError as e:
+            code = _rpc_code(e)
+            log.warning("telegram refused a download: %s", code)
+            raise TelegramRefusedError(code) from e
 
     async def _fetch_message(self, client: Any, entity: Any, message_id: int) -> Any | None:
         # Passing the entity matters: in private chats and basic groups ids are account-wide, and Telethon then
@@ -430,6 +491,36 @@ class ReadOnlyTelegram:
             seconds = int(getattr(e, "seconds", 0) or 0)
             log.warning("telegram flood wait: %d s", seconds)
             raise RateLimitedError(seconds) from e
+        except RPCError as e:
+            # Any other refusal becomes a reason the model can act on (skip, try another chat), not a crash.
+            code = _rpc_code(e)
+            log.warning("telegram refused: %s", code)
+            raise TelegramRefusedError(code) from e
+        except sqlite3.OperationalError as e:
+            # Telethon keeps the session's write transaction open between saves, so a second long-lived process on
+            # the same session file locks the others out.
+            if "locked" not in str(e):
+                raise
+            log.warning("telegram session is locked by another process")
+            raise SessionBusyError() from e
+
+
+# Telethon's generic bases carry the real code in `.message`; its named subclasses only in the class name.
+_GENERIC_RPC = {"RPCError", "InvalidDCError", "BadRequestError", "UnauthorizedError", "ForbiddenError", "NotFoundError",
+                "AuthKeyError", "FloodError", "ServerError", "TimedOutError"}
+
+
+def _rpc_code(e: RPCError) -> str:
+    """Telegram's error code, e.g. ChannelPrivateError -> CHANNEL_PRIVATE."""
+    name = type(e).__name__
+    if name in _GENERIC_RPC:
+        return str(e.message or "UNKNOWN")
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name.removesuffix("Error")).upper()
+
+
+def _error_name(e: Exception) -> str:
+    """The original Telethon class name for logs (the cause of a TelegramRefusedError)."""
+    return type(e.__cause__ or e).__name__
 
 
 # Telethon's own threshold: above it iter_messages does not sleep between history pages.

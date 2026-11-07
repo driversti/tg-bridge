@@ -37,6 +37,7 @@ class FakeTelethonClient:
         self.iter_messages_fail_after: tuple[int, Exception] | None = None
         self.messages_by_id: dict[int, object] = {}  # raw messages get_messages(ids=...) can find
         self.get_messages_calls: list[tuple] = []  # (entity, ids)
+        self.get_messages_error: Exception | None = None
         self.download_chunks: list = []
         self.download_fail_after: tuple[int, Exception] | None = None
         self.iter_download_calls: list[tuple] = []  # (file, offset, file_size, dc_id, request_size)
@@ -78,6 +79,8 @@ class FakeTelethonClient:
 
     async def get_messages(self, entity, ids):
         self.get_messages_calls.append((entity, ids))
+        if self.get_messages_error:
+            raise self.get_messages_error
         return [self.messages_by_id.get(i) for i in ids]
 
     async def iter_download(self, file, *, offset=0, file_size=None, dc_id=None, request_size=None, **kw):
@@ -197,7 +200,7 @@ def test_public_surface_is_read_only():
 
     assert public == {
         "connect", "get_me", "disconnect", "list_dialogs", "list_folders", "get_chat_details", "get_messages", "search",
-        "get_media_files", "read_media",
+        "get_media_files", "read_media", "get_post", "get_comments",
     }
 
 
@@ -672,3 +675,30 @@ async def test_no_read_acknowledge(wrapper):
     await read(wrapper, [tl_msg(1)], query())  # the fake raises AssertionError if send_read_acknowledge is touched
 
     assert "send_read_acknowledge" not in wrapper[1].calls
+
+
+async def test_locked_session_becomes_session_busy(wrapper):
+    # Another tg-bridge process (e.g. Claude Code next to LM Studio) holds the SQLite session's write lock.
+    import sqlite3
+
+    from tg_bridge.errors import SessionBusyError
+
+    tg, fake = wrapper
+    await tg.connect()
+    fake.get_me_error = sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(SessionBusyError) as exc:
+        await tg.get_me()
+
+    assert "another tg-bridge process" in str(exc.value)
+
+
+async def test_other_sqlite_errors_are_not_hidden(wrapper):
+    import sqlite3
+
+    tg, fake = wrapper
+    await tg.connect()
+    fake.get_me_error = sqlite3.OperationalError("disk I/O error")
+
+    with pytest.raises(sqlite3.OperationalError):
+        await tg.get_me()

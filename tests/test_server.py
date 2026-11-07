@@ -8,6 +8,7 @@ from tests.fakes import FakeSource, make_chat, make_media_file, make_message
 from tests.test_config import CREDS
 from tg_bridge.config import load_settings
 from tg_bridge.server import build_server
+from tg_bridge.source import Post
 
 
 NOW_LINE = "Now: 2026-10-28 Wed 14:03 (Europe/Warsaw)"
@@ -31,8 +32,8 @@ async def test_lists_tools(settings):
     tools = await build(FakeSource(), settings).list_tools()
 
     assert sorted(t.name for t in tools) == [
-        "download_media", "export_chat", "get_chat_info", "get_messages", "list_chats", "list_folders", "now",
-        "search_messages", "whoami",
+        "download_media", "export_chat", "get_chat_info", "get_comments", "get_messages", "list_chats",
+        "list_folders", "now", "search_messages", "whoami",
     ]
     # export_chat and download_media write local files; every other tool changes nothing at all.
     assert all(t.annotations.read_only_hint is (t.name not in ("export_chat", "download_media")) for t in tools)
@@ -103,9 +104,41 @@ async def test_get_messages_tool_schema(settings):
 
     props = tools["get_messages"].input_schema["properties"]
     assert set(props) == {
-        "chat", "folder", "mode", "days", "since", "until", "period", "topic", "from_me", "cursor", "around", "limit"
+        "chat", "folder", "mode", "days", "since", "until", "period", "topic", "from_me", "cursor", "around", "limit",
     }
+    assert "comments_of" not in tools["get_messages"].description
     assert "required" not in tools["get_messages"].input_schema or tools["get_messages"].input_schema["required"] == []
+
+
+async def test_get_comments_tool_schema(settings):
+    tools = {t.name: t for t in await build(FakeSource(), settings).list_tools()}
+
+    tool = tools["get_comments"]
+    props = tool.input_schema["properties"]
+    assert set(props) == {"chat", "post", "days", "since", "until", "period", "cursor", "limit"}
+    assert tool.input_schema["required"] == ["chat"]
+    assert props["post"]["anyOf"][0]["type"] == "integer"
+    assert tool.description.startswith("Read the comments under a channel post")
+    assert "End of comments" in tool.description and "search_messages" in tool.description
+    assert tool.annotations.read_only_hint is True
+
+
+async def test_call_get_comments(settings):
+    from datetime import UTC, datetime
+
+    from tests.fakes import make_chat, make_message
+    from tg_bridge.source import Post
+
+    channel = make_chat(id=-1001234567890, kind="channel", title="imatrofAI", username="imatrofAI")
+    when = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
+    post = Post(make_message(id=3186, chat_id=channel.id, date=when, text="check-in"), True, 1, -1000000000555)
+    comment = make_message(id=5012, chat_id=-1000000000555, date=when, text="my bot")
+    src = FakeSource(dialogs=[channel], posts={(channel.id, 3186): post}, comments={(channel.id, 3186): [comment]})
+
+    result = await build(src, settings).call_tool("get_comments", {"chat": "imatrofAI", "post": 3186})
+
+    text = result.content[0].text
+    assert "Comments on post #3186" in text and "#5012 " in text and "End of comments on post #3186." in text
 
 
 async def test_call_get_messages_folder_headlines(settings):
@@ -199,6 +232,7 @@ MINIMAL_ARGS: dict[str, dict] = {
     "export_chat": {"chat": "family"},
     "download_media": {"chat": "family", "message_id": 7},
     "list_folders": {},
+    "get_comments": {"chat": "news", "post": 3},
 }
 
 
@@ -207,7 +241,12 @@ def family_source(n=7, text="hi there"):
     base = datetime(2026, 10, 27, 10, 0, tzinfo=UTC)
     msgs = [make_message(id=i, chat_id=-1, date=base + timedelta(minutes=i), text=text) for i in range(1, n + 1)]
     media = {(-1, 7): (make_media_file(7, size=3), b"abc")}
-    return FakeSource(dialogs=[chat], messages={-1: msgs}, media=media)
+    channel = make_chat(id=-1002, kind="channel", title="News")
+    post = Post(make_message(id=3, chat_id=-1002, date=base, text="post"), True, 1, -1003)
+    return FakeSource(
+        dialogs=[chat, channel], messages={-1: msgs}, media=media, posts={(-1002, 3): post},
+        comments={(-1002, 3): [make_message(id=9, chat_id=-1003, date=base, text="c")]},
+    )
 
 
 async def test_minimal_args_cover_every_tool(settings):

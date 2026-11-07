@@ -2,14 +2,14 @@
 
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from tg_bridge.errors import AmbiguousChatError, AmbiguousFolderError, ChatNotFoundError, FolderNotFoundError
 from tg_bridge.folders import folder_chats, rule_summary
-from tg_bridge.source import Chat, ChatInfo, Folder, MediaInfo, Message, Person, Topic
+from tg_bridge.source import Chat, ChatInfo, Folder, MediaInfo, Message, Person, Post, Topic
 
 TRUNCATED = "(output truncated: narrow with query/kind)"
 MAX_CANDIDATES = 10
@@ -18,6 +18,7 @@ SEP = " · "
 FOOTER_RESERVE = 400
 MAX_TEXT_CHARS = 1500
 SEARCH_TEXT_CHARS = 300
+COMMENT_TEXT_CHARS = 4096  # Telegram's message cap: a comment is shown whole, only the page budget cuts it
 # Everything str.splitlines() treats as a line break, plus other control characters. Names, titles and texts
 # come from other people: a raw break inside one could forge a message line or a "Next: call …" hint.
 _BREAKS = re.compile(r"\r\n|[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")
@@ -213,14 +214,17 @@ def render_page(
     next_hint: Callable[[Message], str],
     end_text: str,
     empty_text: str,
+    line_of: Callable[[Message, str, int | None], str] | None = None,
+    noun: str = "message",
 ) -> str:
-    """Head + day-grouped lines + footer, always <= max_chars. `messages` are chronological."""
+    """Head + day-grouped lines + footer, always <= max_chars. `messages` are chronological.
+    `line_of(message, stamp, text_limit)` replaces the plain chat line and `noun` the counted word (comment threads)."""
     if not messages:
         return _clamp(f"{head}\n{empty_text}", max_chars)
     total = len(messages)
     for count in range(total, 0, -1):
         shown = messages[:count] if keep == "oldest" else messages[total - count :]
-        text = _page_text(head, shown, tz, more or count < total, keep, next_hint, end_text)
+        text = _page_text(head, shown, tz, more or count < total, keep, next_hint, end_text, None, line_of, noun)
         if len(text) <= max_chars:
             return text
     # Not even one fits: cut that message's text. Newest/oldest as the mode dictates.
@@ -228,7 +232,7 @@ def render_page(
     budget = max_chars - len(head) - FOOTER_RESERVE
     text_limit = max(budget, 0)
     while True:
-        text = _page_text(head, [only], tz, True, keep, next_hint, end_text, text_limit)
+        text = _page_text(head, [only], tz, True, keep, next_hint, end_text, text_limit, line_of, noun)
         if len(text) <= max_chars or text_limit == 0:
             return _clamp(text, max_chars)
         text_limit = max(0, text_limit - max(1, len(text) - max_chars))
@@ -247,6 +251,8 @@ def _page_text(
     next_hint: Callable[[Message], str],
     end_text: str,
     text_limit: int | None = None,
+    line_of: Callable[[Message, str, int | None], str] | None = None,
+    noun: str = "message",
 ) -> str:
     lines = [head]
     seen_people: set[int] = set()
@@ -256,21 +262,30 @@ def _page_text(
         if local.date() != day:
             day = local.date()
             lines.append(f"— {day.isoformat()} {WEEKDAYS[day.weekday()]} —")
-        lines.append(_message_line(msg, f"{local:%H:%M}", seen_people, text_limit))
+        stamp = f"{local:%H:%M}"
+        lines.append(line_of(msg, stamp, text_limit) if line_of else _message_line(msg, stamp, seen_people, text_limit))
     first, last = shown[0].date, shown[-1].date
-    noun = "message" if len(shown) == 1 else "messages"
+    counted = noun if len(shown) == 1 else f"{noun}s"
+    lines += comments_hint(shown)
     tail = next_hint(shown[-1] if keep == "oldest" else shown[0]) if unfinished else end_text
-    lines.append(f"Shown {len(shown)} {noun} ({_when(first, tz)} → {_when(last, tz)}). {tail}")
+    lines.append(f"Shown {len(shown)} {counted} ({_when(first, tz)} → {_when(last, tz)}). {tail}")
     return "\n".join(lines)
 
 
-def _text(text: str, limit: int | None) -> str:
-    if len(text) > MAX_TEXT_CHARS:
-        text = f"{text[:MAX_TEXT_CHARS]}…(+{len(text) - MAX_TEXT_CHARS} chars)"
+def _text(text: str, limit: int | None, cap: int = MAX_TEXT_CHARS) -> str:
+    if len(text) > cap:
+        text = f"{text[:cap]}…(+{len(text) - cap} chars)"
     text = one_line(text)
     if limit is not None and len(text) > limit:
         text = text[: max(limit - 1, 0)] + "…"
     return text
+
+
+def comments_hint(shown: Iterable[Message]) -> list[str]:
+    """One ready-made get_comments call per page, for the first post with comments: a ~26B model never found the
+    comment tool from its docstring alone, but copies calls it sees in a result. Empty when no post has comments."""
+    first = next((m for m in shown if m.comment_count), None)
+    return [] if first is None else [f'Comments: call get_comments(chat="{first.chat_id}", post={first.id})']
 
 
 def _message_line(
@@ -296,12 +311,70 @@ def _message_line(
         parts.append(f"↩#{msg.reply_to_id}")
     if msg.edit_date is not None:
         parts.append("✎")
+    if msg.comment_count:
+        parts.append(f"💬{msg.comment_count}")
     who = _sender(msg, seen_people)
     if label is not None and not _is_chat_itself(msg, who, label):
         who = f"{label} › {who}"
     elif label is not None:
         who = label
     return f"{mark}#{msg.id} {stamp} {who}: {' '.join(parts)}"
+
+
+def comments_head(chat: Chat, post: Post, period_text: str | None, tz: ZoneInfo) -> str:
+    """Two lines: what thread this is, and the post it hangs under."""
+    from tg_bridge.headlines import headline  # headlines imports this module
+
+    count = post.comment_count
+    parts = [f"Comments on post #{post.message.id} in {one_line(chat.title)} ({chat.id})"]
+    if count is not None:
+        parts.append(f"{count} {'comment' if count == 1 else 'comments'}")
+    parts.append(f"{period_text or 'whole thread'} ({tz.key})")
+    local = post.message.date.astimezone(tz)
+    about = headline(post.message.text) or (_media_text(post.message.media) if post.message.media else None)
+    line = f"Post {local:%Y-%m-%d} {WEEKDAYS[local.weekday()]} {local:%H:%M}"
+    if about:
+        line += f": {about}"
+    base = chat_link_base(chat)
+    if base:
+        line += f"{SEP}{base}/{post.message.id}"
+    return f"{SEP.join(parts)}\n{line}"
+
+
+def comment_line_of(chat: Chat, post_id: int) -> Callable[[Message, str, int | None], str]:
+    """Line function for a thread: every line names its author with a profile link (the model copies authors per
+    project) and ends with the comment's own link."""
+    base = chat_link_base(chat)
+
+    def line(msg: Message, stamp: str, text_limit: int | None) -> str:
+        parts = []
+        body = _text(msg.text, text_limit, COMMENT_TEXT_CHARS)
+        if body:
+            parts.append(body)
+        if msg.media is not None:
+            parts.append(_media_text(msg.media))
+        if msg.reply_to_id is not None:
+            parts.append(f"↩#{msg.reply_to_id}")
+        if msg.edit_date is not None:
+            parts.append("✎")
+        if base:
+            parts.append(f"{base}/{post_id}?comment={msg.id}")
+        return f"#{msg.id} {stamp} {_comment_author(msg)}: {' '.join(parts)}"
+
+    return line
+
+
+def _comment_author(msg: Message) -> str:
+    if msg.out:
+        return "Me"
+    person = msg.sender
+    if person is None:
+        title = one_line(msg.sender_title) if msg.sender_title else "?"
+        return f"{title} (https://t.me/{msg.sender_username})" if msg.sender_username else title
+    name = one_line(person.display_name)
+    if person.username and not person.is_deleted:
+        return f"{name} (https://t.me/{person.username})"
+    return f"{name} (id {person.id})"
 
 
 def _is_chat_itself(msg: Message, who: str, label: str) -> bool:
@@ -459,6 +532,7 @@ def _hits_text(
         for msg in group:
             stamp = msg.date.astimezone(tz).strftime("%Y-%m-%d %H:%M")
             lines.append(_message_line(msg, stamp, seen_people, text_limit, text_of))
+    lines += comments_hint(shown)
     noun = "hit" if len(shown) == 1 else "hits"
     span = f"{_when(shown[0].date, tz)} → {_when(shown[-1].date, tz)}"
     if unfinished:
@@ -544,6 +618,7 @@ def _around_text(
             lines.append(f"— {day.isoformat()} {WEEKDAYS[day.weekday()]} —")
         mark = "▶" if msg.id == target_id else ""
         lines.append(_message_line(msg, f"{local:%H:%M}", seen_people, text_limit, mark=mark))
+    lines += comments_hint(shown)
     noun = "message" if len(shown) == 1 else "messages"
     lines.append(
         f"Shown {len(shown)} {noun} around #{target_id} ({_when(shown[0].date, tz)} → {_when(shown[-1].date, tz)})."

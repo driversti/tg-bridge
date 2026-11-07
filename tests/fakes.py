@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from tg_bridge.errors import MessageNotFoundError
-from tg_bridge.source import Chat, ChatInfo, Folder, MediaFile, MediaInfo, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source import Chat, ChatInfo, Folder, MediaFile, MediaInfo, Message, MessageQuery, Person, Post, SearchQuery
 
 
 def make_person(**overrides) -> Person:
@@ -113,6 +113,8 @@ class FakeSource:
         messages: dict[int, list[Message]] | None = None,
         media: dict[tuple[int, int], tuple[MediaFile, bytes]] | None = None,
         chunk: int = 4,
+        posts: dict[tuple[int, int], Post] | None = None,
+        comments: dict[tuple[int, int], list[Message]] | None = None,
     ):
         self.me = me or make_person()
         self.error = error
@@ -127,6 +129,10 @@ class FakeSource:
         self.list_folders_calls: list[bool] = []
         self.media = dict(media or {})  # (chat id, message id) -> (file, content)
         self.chunk = chunk
+        self.posts = dict(posts or {})  # (channel id, post id) -> Post
+        self.comments = {k: list(v) for k, v in (comments or {}).items()}  # (channel id, post id) -> comments
+        self.post_lookups: list[tuple[int, int]] = []
+        self.comment_queries: list[MessageQuery] = []
         self.read_offsets: list[tuple[int, int]] = []  # (message_id, offset) per read_media call
 
     async def whoami(self) -> Person:
@@ -177,6 +183,26 @@ class FakeSource:
         if query.boundary_id is not None:
             found = [m for m in found if m.id < query.boundary_id]
         return found[::-1][: query.limit]
+
+    async def get_post(self, chat: Chat, post_id: int) -> Post | None:
+        self.post_lookups.append((chat.id, post_id))
+        if self.error:
+            raise self.error
+        return self.posts.get((chat.id, post_id))
+
+    async def get_comments(self, chat: Chat, post: Post, query: MessageQuery) -> list[Message]:
+        """Oldest first; period, id boundary and limit applied like get_messages."""
+        self.comment_queries.append(query)
+        if self.error:
+            raise self.error
+        found = sorted(self.comments.get((chat.id, post.message.id), []), key=lambda m: m.id)
+        if query.start is not None:
+            found = [m for m in found if m.date >= query.start]
+        if query.end is not None:
+            found = [m for m in found if m.date < query.end]
+        if query.boundary_id is not None:
+            found = [m for m in found if m.id > query.boundary_id]
+        return found[: query.limit]
 
     async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         """Casefolded substring match, newest first by (date, chat_id, id)."""
