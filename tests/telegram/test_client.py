@@ -41,6 +41,9 @@ class FakeTelethonClient:
         self.download_chunks: list = []
         self.download_fail_after: tuple[int, Exception] | None = None
         self.iter_download_calls: list[tuple] = []  # (file, offset, file_size, dc_id, request_size)
+        self.profile_photo: bytes | None = None
+        self.profile_photo_error: Exception | None = None
+        self.profile_photo_calls: list[tuple] = []  # (entity, kwargs)
 
     def __getattr__(self, name):  # only reached for attributes the fake does not define
         if name == "send_read_acknowledge":
@@ -89,6 +92,12 @@ class FakeTelethonClient:
             if self.download_fail_after and i == self.download_fail_after[0]:
                 raise self.download_fail_after[1]
             yield chunk
+
+    async def download_profile_photo(self, entity, file=None, **kwargs):
+        self.profile_photo_calls.append((entity, {"file": file, **kwargs}))
+        if self.profile_photo_error:
+            raise self.profile_photo_error
+        return self.profile_photo
 
     async def get_input_entity(self, peer):
         self.input_entity_ids.append(peer)
@@ -200,7 +209,7 @@ def test_public_surface_is_read_only():
 
     assert public == {
         "connect", "get_me", "disconnect", "list_dialogs", "list_folders", "get_chat_details", "get_messages", "search",
-        "get_media_files", "read_media", "get_post", "get_comments",
+        "get_media_files", "read_media", "get_post", "get_comments", "download_chat_photo",
     }
 
 
@@ -702,3 +711,35 @@ async def test_other_sqlite_errors_are_not_hidden(wrapper):
 
     with pytest.raises(sqlite3.OperationalError):
         await tg.get_me()
+
+
+# --- chat photos (admin page) -------------------------------------------------
+
+
+async def test_download_chat_photo_returns_small_photo_bytes_in_memory(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.profile_photo = b"\xff\xd8jpeg"
+
+    assert await tg.download_chat_photo(-1001) == b"\xff\xd8jpeg"
+
+    (entity, kwargs), = fake.profile_photo_calls
+    assert entity == -1001
+    assert kwargs["file"] is bytes and kwargs["download_big"] is False
+    assert {type(r).__name__ for r in fake.requests} <= ALLOWED_REQUESTS
+
+
+async def test_download_chat_photo_none_without_photo(wrapper):
+    tg, fake = wrapper
+    await tg.connect()
+
+    assert await tg.download_chat_photo(-1001) is None
+
+
+async def test_download_chat_photo_none_on_rpc_error(wrapper, caplog):
+    tg, fake = wrapper
+    await tg.connect()
+    fake.profile_photo_error = ChannelPrivateError(request=None)
+
+    assert await tg.download_chat_photo(-1001) is None
+    assert "ChannelPrivate" in caplog.text

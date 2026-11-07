@@ -62,8 +62,10 @@ MCP client (LM Studio).
 ## 4. Constraints
 
 - **Hardware:** MacBook Pro M1 Max 64 GB runs LM Studio + tg-bridge (stage 1).
-  A small always-on Linux box on the LAN (Jetson Orin Nano class: 8 GB RAM, NVMe,
-  Docker + Ollama) is reserved for stage 2+ (always-on recorder).
+  An always-on home server (Proxmox, LXC containers) hosts the networked bridge and,
+  later, the recorder. The owner's agent Hermes (LXC 110, cloud model) is the phone-side
+  client. The Jetson Orin Nano planned earlier was dropped (2026-11-07): an 8 GB box can't
+  run a model good enough for multi-step tool use.
 - **Telegram API:** MTProto user client with the user's own `api_id`/`api_hash`
   (see setup.md §1) and a **new, dedicated session** (own login).
 - **Rate limits:** Telegram returns `FloodWait`; the bridge must respect it.
@@ -169,14 +171,20 @@ characters. When there's more, it returns `next_cursor` and says so explicitly i
 text, so the model knows to page or narrow the period.
 
 **Long-period summaries:** the model pages through `get_messages`. If that turns out
-too weak for a ~30B model, a later feature can add a map-reduce `summarize` tool
-backed by a local Ollama model. Not in stage 1.
+too weak for a ~30B model, a later feature can add summarisation, but only via MCP
+sampling (the client's model does the work); the bridge itself never calls an LLM (roadmap).
 
 **Errors** are returned as short human-readable tool results, never stack traces:
 chat not found (with closest matches), ambiguous chat (candidates), FloodWait
 (waits automatically if ≤ 30 s, otherwise reports the wait time), not logged in
 (points to the login script), any other Telegram refusal (its code plus a plain reason, e.g.
 `CHANNEL_PRIVATE`: "the channel … is private, or this account was removed or banned there").
+
+**Scope** (feature 17): `TG_BRIDGE_SCOPE=public` (the default): public channels and supergroups (with a
+`@username`) are always visible; every other chat (people, bots, Saved Messages, private groups and channels) is hidden
+until the owner switches it on. A person's `@username` never makes a 1:1 chat public. `all` keeps everything visible. A hidden chat does not exist for the model: it is never a resolution
+candidate or suggestion, and asking for it gives the not-found text of a missing chat plus one line saying the bridge
+runs in public scope. Under `public`, `list_chats` ends with the same line.
 
 ## 8. Security & privacy
 
@@ -192,8 +200,23 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
   text, names or phone numbers. Only counts, chat ids and durations.
 - **Exports/downloads** go to configurable dirs outside the repo
   (defaults: `~/tg-bridge-data/exports`, `~/tg-bridge-data/downloads`).
-- **No network listener** in stage 1 (stdio). Stage 2 (Jetson, network) must add
-  auth + LAN-only binding before going live.
+- **No MCP network listener** in stage 1 (stdio). The networked bridge (feature 11) must add
+  auth + LAN-only binding and run with the cloud scope (feature 17) before going live.
+- **Scope (feature 17):** the rule is enforced in code, never by a prompt. `ScopedSource` wraps `MessageSource`:
+  it filters `list_dialogs`, refuses every chat-taking call for a hidden chat id (cursors carry chat ids) and drops
+  hidden hits from global search, topping the page up from the next raw pages (bounded). Fail closed: an unknown kind,
+  a missing username or an unreadable allowlist file means hidden. The allowlist
+  (`<session stem>.allowlist.json` next to the session, dir `700`, file `600`) is written only by the admin page and
+  re-read on every call, so a switch takes effect without a restart.
+- **Admin page (`tg-bridge-admin`):** a separate stdlib HTTP server on `127.0.0.1` only (`TG_BRIDGE_ADMIN_PORT`).
+  It prints a one-time login link with a random token to the terminal; the link sets an HttpOnly, SameSite=Strict
+  cookie and every other route needs it. POSTs carry a CSRF token; chat titles (attacker-controlled) are
+  HTML-escaped; a CSP forbids anything but the inline style and one nonce'd script; the request log is off because
+  it would contain the token. The page has tabs (Groups, Channels, People, Mine); switching on a person, a bot or
+  Saved Messages asks for confirmation (generic text in the nonce'd script, no chat data in JS) and switched-on 1:1
+  chats are marked "shared with cloud". Small chat photos are cached on disk (`<session stem>.photos/`, dir `700`,
+  files `600`, named by chat id and photo id, so only a changed photo is downloaded again); a second Refresh within
+  10 s is ignored. It reads Telegram only at start and on Refresh, then releases the session. Phone access goes through `tailscale serve`, not through a wider bind.
 
 ## 9. Testing
 
@@ -209,10 +232,10 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
 
 | Stage | Module | Notes |
 |---|---|---|
-| 2 | **Recorder + ArchiveSource** on Jetson | Always-on listener: new messages, edits (versions), deletions, profile snapshots → SQLite. MCP over network with auth |
+| 2 | **Recorder + ArchiveSource** on the home server (LXC) | Always-on listener: new messages, edits (versions), deletions, profile snapshots → SQLite. MCP over network with auth |
 | 2b | **Backfill** | Throttled, resumable history import into the archive |
-| 3 | **Semantic search** | Embeddings via Ollama on Jetson, `sqlite-vec` |
-| 4 | **Telegram bot** interface | Another MCP client in front of the same tools |
+| 3 | **Semantic search** | Embeddings via a local model (host decided in its brief), `sqlite-vec` |
+| 4 | **Phone access** | Covered by the owner's agent Hermes as an MCP client of the networked bridge with `scope=public` (features 11, 17) |
 | 5 | **Channel/group discovery** by interests | Searches outside existing chats |
 
 ## 11. Clarifications (from builder review; Claude's calls unless marked)

@@ -14,7 +14,7 @@ from tg_bridge.telegram.client import NOT_LOGGED_IN
 
 @pytest.fixture
 def settings(tmp_path):
-    return load_settings(env=CREDS, config_file=tmp_path / "c")
+    return load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": "all"}, config_file=tmp_path / "c")
 
 
 class AgedSource(FakeSource):
@@ -153,7 +153,7 @@ async def test_list_chats_empty_match(settings):
 
 
 async def test_list_chats_truncates_to_max_chars(tmp_path):
-    small = replace(load_settings(env=CREDS, config_file=tmp_path / "c"), max_chars=200)
+    small = replace(load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": "all"}, config_file=tmp_path / "c"), max_chars=200)
     dialogs = [make_chat(id=-i, title=f"Chat {i}") for i in range(1, 50)]
 
     text = await tools.list_chats(FakeSource(dialogs=dialogs), small)
@@ -163,7 +163,7 @@ async def test_list_chats_truncates_to_max_chars(tmp_path):
 
 
 async def test_list_chats_header_counts_lines_actually_shown_when_truncated(tmp_path):
-    small = replace(load_settings(env=CREDS, config_file=tmp_path / "c"), max_chars=300)
+    small = replace(load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": "all"}, config_file=tmp_path / "c"), max_chars=300)
     dialogs = [make_chat(id=-i, title=f"Chat {i}") for i in range(1, 50)]
 
     text = await tools.list_chats(FakeSource(dialogs=dialogs), small)
@@ -484,7 +484,7 @@ async def test_rate_limited_is_readable(settings):
 @pytest.mark.parametrize("max_chars", [300, 2000, 12000])
 @pytest.mark.parametrize("period", [{"days": 3}, {}])
 async def test_output_never_exceeds_budget(tmp_path, max_chars, period):
-    small = replace(load_settings(env=CREDS, config_file=tmp_path / "c"), max_chars=max_chars)
+    small = replace(load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": "all"}, config_file=tmp_path / "c"), max_chars=max_chars)
     source = reader(messages={GROUP.id: history()})
     first = source.messages[GROUP.id][0]  # a huge message at the start of the forward read
     source.messages[GROUP.id][0] = make_message(id=1, chat_id=GROUP.id, date=first.date, text="x" * 1400)

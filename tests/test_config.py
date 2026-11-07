@@ -133,3 +133,33 @@ def test_private_config_file_does_not_warn(tmp_path, caplog):
         load_settings(env={}, config_file=cfg)
 
     assert caplog.records == []
+
+
+def test_scope_defaults_to_public(tmp_path):
+    assert load_settings(env=CREDS, config_file=tmp_path / "m").scope == "public"
+
+
+@pytest.mark.parametrize("value", ["all", " ALL ", "Public"])
+def test_scope_accepts_all_and_public_loosely(tmp_path, value):
+    settings = load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": value}, config_file=tmp_path / "m")
+    assert settings.scope == value.strip().lower()
+
+
+@pytest.mark.parametrize("value", ["private", "", "none"])
+def test_scope_rejects_unknown_value(tmp_path, value):
+    with pytest.raises(ConfigError, match="TG_BRIDGE_SCOPE"):
+        load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": value}, config_file=tmp_path / "m")
+
+
+def test_admin_port_default(tmp_path):
+    assert load_settings(env=CREDS, config_file=tmp_path / "m").admin_port == 8765
+
+
+def test_admin_port_configurable(tmp_path):
+    assert load_settings(env={**CREDS, "TG_BRIDGE_ADMIN_PORT": "9000"}, config_file=tmp_path / "m").admin_port == 9000
+
+
+@pytest.mark.parametrize("value", ["0", "70000", "abc", "-1"])
+def test_admin_port_rejected(tmp_path, value):
+    with pytest.raises(ConfigError, match="TG_BRIDGE_ADMIN_PORT"):
+        load_settings(env={**CREDS, "TG_BRIDGE_ADMIN_PORT": value}, config_file=tmp_path / "m")

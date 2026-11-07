@@ -12,7 +12,7 @@ from tg_bridge.errors import RateLimitedError
 
 @pytest.fixture
 def settings(tmp_path):
-    return load_settings(env=CREDS, config_file=tmp_path / "c")
+    return load_settings(env={**CREDS, "TG_BRIDGE_SCOPE": "all"}, config_file=tmp_path / "c")
 
 
 def channels(first: int, count: int, unread: int = 0):

@@ -34,13 +34,17 @@ def chat_from_dialog(
     entity = dialog.entity
     peer: Person | None = None
     forum = False
+    is_self = False
     if isinstance(entity, tl.User):
         peer = person_from_user(entity)
         kind: ChatKind = "bot" if peer.is_bot else "user"
         title, username = peer.display_name, peer.username
+        if getattr(entity, "is_self", False):
+            is_self = True
+            title = "Saved Messages"  # Telethon would show the owner's own name
     elif isinstance(entity, (tl.Channel, tl.ChannelForbidden)):
         kind = "channel" if entity.broadcast else "supergroup"
-        title, username = entity.title, getattr(entity, "username", None)
+        title, username = entity.title, _channel_username(entity)
         forum = bool(getattr(entity, "forum", False))
     else:  # Chat, ChatForbidden
         kind = "group"
@@ -68,7 +72,36 @@ def chat_from_dialog(
         is_muted=_is_muted(mute_until, now),
         is_unread=unread,
         has_unread_mention=mentions > 0,
+        is_self=is_self,
+        is_creator=False if isinstance(entity, tl.User) else bool(getattr(entity, "creator", False)),
+        photo_id=_photo_id(entity),
+        top_message_id=_top_message_id(dialog, raw),
     )
+
+
+def _top_message_id(dialog, raw) -> int | None:
+    """Already in the dialog list, so a link needs no extra request."""
+    for value in (getattr(getattr(dialog, "message", None), "id", None), getattr(raw, "top_message", None)):
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+def _photo_id(entity) -> int | None:
+    photo = getattr(entity, "photo", None)
+    if isinstance(photo, (tl.ChatPhoto, tl.UserProfilePhoto)):
+        return photo.photo_id
+    return None
+
+
+def _channel_username(entity) -> str | None:
+    """The public @username, incl. collectible ones: a channel that only has those is still public."""
+    if getattr(entity, "username", None):
+        return entity.username
+    for extra in getattr(entity, "usernames", None) or []:
+        if getattr(extra, "active", False) and getattr(extra, "username", None):
+            return extra.username
+    return None
 
 
 def _mute_category(kind: ChatKind) -> str:

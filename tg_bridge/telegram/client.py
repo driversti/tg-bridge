@@ -441,6 +441,16 @@ class ReadOnlyTelegram:
             log.warning("telegram refused a download: %s", code)
             raise TelegramRefusedError(code) from e
 
+    async def download_chat_photo(self, chat_id: int) -> bytes | None:
+        """The small profile photo of a chat, in memory; None when it has none or Telegram refuses (a missing icon is
+        no reason to fail the admin page)."""
+        client = self._connected()
+        try:
+            return await client.download_profile_photo(chat_id, file=bytes, download_big=False)
+        except RPCError as e:
+            log.warning("could not download a chat photo: %s", type(e).__name__)
+            return None
+
     async def _fetch_message(self, client: Any, entity: Any, message_id: int) -> Any | None:
         # Passing the entity matters: in private chats and basic groups ids are account-wide, and Telethon then
         # returns None for an id that belongs to another chat.

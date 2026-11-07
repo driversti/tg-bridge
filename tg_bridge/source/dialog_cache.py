@@ -81,6 +81,11 @@ def _chat_from_dict(d: dict[str, Any]) -> Chat:
         is_muted=d["is_muted"],
         is_unread=d["is_unread"],
         has_unread_mention=d["has_unread_mention"],
+        # Added later: an older cache file has no such keys and must still load.
+        is_self=d.get("is_self", False),
+        is_creator=d.get("is_creator", False),
+        photo_id=d.get("photo_id"),
+        top_message_id=d.get("top_message_id"),
     )
 
 

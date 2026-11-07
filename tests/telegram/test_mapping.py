@@ -75,6 +75,19 @@ def test_user_dialog():
     assert chat.is_archived is False and chat.is_forum is False
 
 
+def test_top_message_id_comes_from_the_dialog_message_or_the_raw_dialog():
+    entity = tl_channel(megagroup=True)
+    with_message = dialog(entity, id=-1000000000010)
+    with_message.message = SimpleNamespace(id=77)
+    assert chat_from_dialog(with_message).top_message_id == 77
+
+    raw = raw_dialog()
+    raw.top_message = 55
+    assert chat_from_dialog(dialog(entity, id=-1000000000010, raw=raw)).top_message_id == 55
+
+    assert chat_from_dialog(dialog(entity, id=-1000000000010)).top_message_id is None
+
+
 def test_bot_dialog():
     chat = chat_from_dialog(dialog(tl_user(bot=True, first_name="Helper", last_name=None)))
 
@@ -687,3 +700,56 @@ def test_anonymous_admin_of_a_group_gets_no_username():
 def test_message_comment_count_only_for_channel_comments(replies, expected):
     # Telegram sends the count with every channel post, so showing it costs no request.
     assert message_from_tl(tl_msg(replies=replies), -1001234567890).comment_count == expected
+
+
+def test_collectible_username_makes_channel_public():
+    usernames = [tl.Username(username="a", active=False), tl.Username(username="b", active=True)]
+    chat = chat_from_dialog(dialog(tl_channel(broadcast=True, username=None, usernames=usernames)))
+
+    assert chat.username == "b"
+
+
+def test_no_active_collectible_username_stays_private():
+    usernames = [tl.Username(username="a", active=False)]
+
+    assert chat_from_dialog(dialog(tl_channel(broadcast=True, usernames=usernames))).username is None
+
+
+def test_plain_username_wins_over_collectible():
+    usernames = [tl.Username(username="b", active=True)]
+    chat = chat_from_dialog(dialog(tl_channel(megagroup=True, username="main", usernames=usernames)))
+
+    assert chat.username == "main"
+
+
+def test_new_fields_default_for_plain_entities():
+    chat = chat_from_dialog(dialog(tl_user()))
+
+    assert (chat.is_self, chat.is_creator, chat.photo_id) == (False, False, None)
+
+
+def test_self_dialog_is_saved_messages():
+    chat = chat_from_dialog(dialog(tl_user(is_self=True, first_name="Me", last_name="Owner", username="me_owner")))
+
+    assert chat.kind == "user" and chat.is_self is True
+    assert chat.title == "Saved Messages"
+
+
+def test_creator_flag_for_channel_and_basic_group():
+    assert chat_from_dialog(dialog(tl_channel(megagroup=True, creator=True))).is_creator is True
+    assert chat_from_dialog(dialog(tl_channel(megagroup=True))).is_creator is False
+    group = tl.Chat(id=5, title="Old", photo=tl.ChatPhotoEmpty(), participants_count=3, date=None, version=1, creator=True)
+    assert chat_from_dialog(dialog(group, id=-5)).is_creator is True
+
+
+def test_user_is_never_creator():
+    assert chat_from_dialog(dialog(tl_user())).is_creator is False
+
+
+def test_photo_id_from_real_photos_only():
+    chan = tl_channel(broadcast=True, photo=tl.ChatPhoto(photo_id=555, dc_id=2))
+    assert chat_from_dialog(dialog(chan)).photo_id == 555
+    usr = tl_user(photo=tl.UserProfilePhoto(photo_id=777, dc_id=2))
+    assert chat_from_dialog(dialog(usr)).photo_id == 777
+    assert chat_from_dialog(dialog(tl_channel(broadcast=True))).photo_id is None  # ChatPhotoEmpty
+    assert chat_from_dialog(dialog(tl_user(photo=tl.UserProfilePhotoEmpty()))).photo_id is None

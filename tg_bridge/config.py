@@ -5,6 +5,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
@@ -23,6 +24,8 @@ DEFAULTS = {
     "TG_BRIDGE_EXPORT_DIR": "~/tg-bridge-data/exports",
     "TG_BRIDGE_DOWNLOAD_DIR": "~/tg-bridge-data/downloads",
     "TG_BRIDGE_MAX_DOWNLOAD_MB": "200",
+    "TG_BRIDGE_SCOPE": "public",
+    "TG_BRIDGE_ADMIN_PORT": "8765",
 }
 
 
@@ -41,6 +44,8 @@ class Settings:
     export_dir: Path
     download_dir: Path
     max_download_bytes: int
+    scope: Literal["all", "public"]
+    admin_port: int
 
 
 def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None = None) -> Settings:
@@ -77,6 +82,14 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
     if not (max_mb_raw.isascii() and max_mb_raw.isdigit()) or int(max_mb_raw) <= 0:
         raise ConfigError("TG_BRIDGE_MAX_DOWNLOAD_MB must be a positive integer")
 
+    scope = values["TG_BRIDGE_SCOPE"].strip().lower()
+    if scope not in ("all", "public"):
+        raise ConfigError("TG_BRIDGE_SCOPE must be all or public")
+
+    port_raw = values["TG_BRIDGE_ADMIN_PORT"].strip()
+    if not (port_raw.isascii() and port_raw.isdigit()) or not 1 <= int(port_raw) <= 65535:
+        raise ConfigError("TG_BRIDGE_ADMIN_PORT must be an integer from 1 to 65535")
+
     return Settings(
         api_id=int(api_id_raw),
         api_hash=required("TG_API_HASH"),
@@ -86,6 +99,8 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
         export_dir=_path(values["TG_BRIDGE_EXPORT_DIR"]),
         download_dir=_path(values["TG_BRIDGE_DOWNLOAD_DIR"]),
         max_download_bytes=int(max_mb_raw) * 1024 * 1024,
+        scope=scope,  # type: ignore[arg-type]  # validated above
+        admin_port=int(port_raw),
     )
 
 
