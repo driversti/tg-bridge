@@ -100,3 +100,7 @@ Facts checked on LXC 110 (2026-11-07): Hermes **v0.23.0**, runs as `hermes-gatew
 - [ ] The Homelab bot chat can't be switched on, and Hermes can't find it.
 - [ ] Another LAN device (not Hermes' IP) can't reach the MCP port (firewall).
 - [ ] The cheat sheet's commands all work as written.
+
+## Log
+
+- **Hermes compatibility (Task 3, 2026-11-07):** `mcp==2.0.0` streamable-HTTP client (Python 3.11) against our `mcp` 2.3 server with the SDK defaults (**stateful sessions, SSE responses**, bearer header): initialize, `list_tools` (10 tools) and `call_tool("now")` all work → `OK 10 tools`. No fallback to `stateless_http`/`json_response` needed. Re-run: `scripts/hermes_compat.py`.
