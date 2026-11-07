@@ -40,7 +40,7 @@ def chat_from_dialog(
         title, username = peer.display_name, peer.username
     elif isinstance(entity, (tl.Channel, tl.ChannelForbidden)):
         kind = "channel" if entity.broadcast else "supergroup"
-        title, username = entity.title, getattr(entity, "username", None)
+        title, username = entity.title, _channel_username(entity)
         forum = bool(getattr(entity, "forum", False))
     else:  # Chat, ChatForbidden
         kind = "group"
@@ -69,6 +69,16 @@ def chat_from_dialog(
         is_unread=unread,
         has_unread_mention=mentions > 0,
     )
+
+
+def _channel_username(entity) -> str | None:
+    """The public @username, incl. collectible ones: a channel that only has those is still public."""
+    if getattr(entity, "username", None):
+        return entity.username
+    for extra in getattr(entity, "usernames", None) or []:
+        if getattr(extra, "active", False) and getattr(extra, "username", None):
+            return extra.username
+    return None
 
 
 def _mute_category(kind: ChatKind) -> str:

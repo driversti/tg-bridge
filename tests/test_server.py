@@ -20,7 +20,7 @@ def fixed_now():
 
 @pytest.fixture
 def settings(tmp_path):
-    env = {**CREDS, "TG_BRIDGE_EXPORT_DIR": str(tmp_path / "exports"), "TG_BRIDGE_DOWNLOAD_DIR": str(tmp_path / "dl")}
+    env = {**CREDS, "TG_BRIDGE_SCOPE": "all", "TG_BRIDGE_EXPORT_DIR": str(tmp_path / "exports"), "TG_BRIDGE_DOWNLOAD_DIR": str(tmp_path / "dl")}
     return load_settings(env=env, config_file=tmp_path / "c")
 
 
@@ -295,3 +295,25 @@ async def test_rolling_periods_map_to_days(settings):
         assert '"last 7 days" or "past week" → days=7' in description
         assert "previous calendar week" in description
         assert "previous_month" in description and "last_month" not in description
+
+
+def test_build_source_public_wraps_in_scoped_source(tmp_path):
+    from tg_bridge.server import build_source
+    from tg_bridge.source.live import LiveSource
+    from tg_bridge.source.scoped import ScopedSource
+
+    env = {**CREDS, "TG_BRIDGE_SESSION": str(tmp_path / "s.session"), "TG_BRIDGE_SCOPE": "public"}
+    source = build_source(load_settings(env=env, config_file=tmp_path / "c"))
+
+    assert isinstance(source, ScopedSource)
+    assert isinstance(source._inner, LiveSource)
+    assert source._allowlist._path == tmp_path / "s.allowlist.json"
+
+
+def test_build_source_all_is_the_bare_live_source(tmp_path):
+    from tg_bridge.server import build_source
+    from tg_bridge.source.live import LiveSource
+
+    env = {**CREDS, "TG_BRIDGE_SESSION": str(tmp_path / "s.session"), "TG_BRIDGE_SCOPE": "all"}
+
+    assert type(build_source(load_settings(env=env, config_file=tmp_path / "c"))) is LiveSource

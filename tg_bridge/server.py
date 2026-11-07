@@ -17,8 +17,10 @@ from tg_bridge.config import Settings, load_settings
 from tg_bridge.errors import ConfigError
 from tg_bridge.logging_setup import configure_logging
 from tg_bridge.source import MessageSource
+from tg_bridge.source.allowlist import Allowlist, allowlist_path
 from tg_bridge.source.dialog_cache import DialogCache
 from tg_bridge.source.live import LiveSource
+from tg_bridge.source.scoped import ScopedSource
 from tg_bridge.telegram.client import ReadOnlyTelegram
 from tg_bridge.timerange import WEEKDAYS, iso_week, now_line
 
@@ -263,6 +265,15 @@ def build_server(
     return server
 
 
+def build_source(settings: Settings) -> MessageSource:
+    """The live source, wrapped in the scope filter unless the owner opted into `all`."""
+    dialog_cache = DialogCache(settings.session_path.with_name(f"{settings.session_path.stem}.dialogs.json"))
+    live = LiveSource(ReadOnlyTelegram(settings), dialog_cache=dialog_cache)
+    if settings.scope == "all":
+        return live
+    return ScopedSource(live, Allowlist(allowlist_path(settings.session_path)))
+
+
 def main() -> None:
     configure_logging()
     try:
@@ -270,6 +281,5 @@ def main() -> None:
     except ConfigError as e:
         print(f"tg-bridge: {e}", file=sys.stderr)
         sys.exit(2)
-    log.info("starting tg-bridge (stdio)")
-    dialog_cache = DialogCache(settings.session_path.with_name(f"{settings.session_path.stem}.dialogs.json"))
-    build_server(LiveSource(ReadOnlyTelegram(settings), dialog_cache=dialog_cache), settings).run()
+    log.info("starting tg-bridge (stdio, scope=%s)", settings.scope)
+    build_server(build_source(settings), settings).run()

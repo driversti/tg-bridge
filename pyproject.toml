@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 tg-bridge = "tg_bridge.server:main"
+tg-bridge-admin = "tg_bridge.admin:main"
 
 [dependency-groups]
 dev = [

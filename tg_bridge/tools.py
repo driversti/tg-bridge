@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from dataclasses import replace
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -120,8 +121,26 @@ async def resolve_chat_arg(source: MessageSource, arg: str, settings: Settings) 
             raise ToolError(ambiguous_text(e, settings.timezone, settings.max_chars)) from e
 
 
+SCOPE_NOTE = (
+    "This bridge runs in public scope: 1:1 chats, bots and private groups that the owner has not switched on "
+    "are not available."
+)
+
+
+def _with_scope_note(text: str, settings: Settings) -> str:
+    return f"{text}\n{SCOPE_NOTE}" if settings.scope == "public" else text
+
+
+def _room_for_note(settings: Settings) -> Settings:
+    """Settings whose budget leaves room for the scope note, so text plus note stays within max_chars."""
+    if settings.scope != "public":
+        return settings
+    return replace(settings, max_chars=settings.max_chars - len(SCOPE_NOTE) - 1)
+
+
 def _not_found(e: ChatNotFoundError, settings: Settings) -> ToolError:
-    return ToolError(not_found_text(e, settings.timezone, settings.max_chars))
+    text = not_found_text(e, settings.timezone, _room_for_note(settings).max_chars)
+    return ToolError(_with_scope_note(text, settings))
 
 
 async def list_chats(
@@ -132,6 +151,19 @@ async def list_chats(
     limit: int = 30,
     folder: str | int | None = None,
     min_folders: int | None = None,
+) -> str:
+    text = await _list_chats(source, _room_for_note(settings), query, kind, limit, folder, min_folders)
+    return _with_scope_note(text, settings)
+
+
+async def _list_chats(
+    source: MessageSource,
+    settings: Settings,
+    query: str | None,
+    kind: str | None,
+    limit: int,
+    folder: str | int | None,
+    min_folders: int | None,
 ) -> str:
     kinds = _kinds(kind)
     limit = max(MIN_LIMIT, min(MAX_LIMIT, limit))

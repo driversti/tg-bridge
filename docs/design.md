@@ -180,6 +180,12 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
 (points to the login script), any other Telegram refusal (its code plus a plain reason, e.g.
 `CHANNEL_PRIVATE`: "the channel … is private, or this account was removed or banned there").
 
+**Scope** (feature 17): `TG_BRIDGE_SCOPE=public` (the default) hides every 1:1 chat, bot and Saved Messages, and
+every private group or channel the owner has not switched on; public channels and supergroups (with a `@username`)
+stay visible. `all` keeps everything visible. A hidden chat does not exist for the model: it is never a resolution
+candidate or suggestion, and asking for it gives the not-found text of a missing chat plus one line saying the bridge
+runs in public scope. Under `public`, `list_chats` ends with the same line.
+
 ## 8. Security & privacy
 
 - **Read-only by construction:** `ReadOnlyTelegram` exposes no write methods; a test
@@ -194,8 +200,20 @@ chat not found (with closest matches), ambiguous chat (candidates), FloodWait
   text, names or phone numbers. Only counts, chat ids and durations.
 - **Exports/downloads** go to configurable dirs outside the repo
   (defaults: `~/tg-bridge-data/exports`, `~/tg-bridge-data/downloads`).
-- **No network listener** in stage 1 (stdio). The networked bridge (feature 11) must add
-  auth + LAN-only binding and the cloud scope (feature 17) before going live.
+- **No MCP network listener** in stage 1 (stdio). The networked bridge (feature 11) must add
+  auth + LAN-only binding and run with the cloud scope (feature 17) before going live.
+- **Scope (feature 17):** the rule is enforced in code, never by a prompt. `ScopedSource` wraps `MessageSource`:
+  it filters `list_dialogs`, refuses every chat-taking call for a hidden chat id (cursors carry chat ids) and drops
+  hidden hits from global search, topping the page up from the next raw pages (bounded). Fail closed: an unknown kind,
+  a missing username or an unreadable allowlist file means hidden. The allowlist
+  (`<session stem>.allowlist.json` next to the session, dir `700`, file `600`) is written only by the admin page and
+  re-read on every call, so a switch takes effect without a restart.
+- **Admin page (`tg-bridge-admin`):** a separate stdlib HTTP server on `127.0.0.1` only (`TG_BRIDGE_ADMIN_PORT`).
+  It prints a one-time login link with a random token to the terminal; the link sets an HttpOnly, SameSite=Strict
+  cookie and every other route needs it. POSTs carry a CSRF token; chat titles (attacker-controlled) are
+  HTML-escaped; a CSP forbids anything but the inline style and one nonce'd script; the request log is off because
+  it would contain the token. It reads Telegram (dialogs and small chat photos, kept in memory) only at start and on
+  Refresh, then releases the session. Phone access goes through `tailscale serve`, not through a wider bind.
 
 ## 9. Testing
 

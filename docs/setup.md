@@ -51,11 +51,15 @@ can't find the menu entry (it moves between LM Studio versions), then restart LM
   "mcpServers": {
     "tg-bridge": {
       "command": "/opt/homebrew/bin/uv",
-      "args": ["--directory", "/absolute/path/to/tg-bridge", "run", "tg-bridge"]
+      "args": ["--directory", "/absolute/path/to/tg-bridge", "run", "tg-bridge"],
+      "env": { "TG_BRIDGE_SCOPE": "all" }
     }
   }
 }
 ```
+
+`TG_BRIDGE_SCOPE` defaults to `public`, which hides 1:1 chats, bots and private groups. Without
+`"TG_BRIDGE_SCOPE": "all"` in `env`, LM Studio sees no private chats.
 
 Use absolute paths: `which uv` for `command` (`/opt/homebrew/bin/uv` with Homebrew,
 `~/.local/bin/uv` with the official installer) and your clone's location in `args`.
@@ -77,6 +81,25 @@ even before login. `whoami` then tells you to run step 2.
 | `TG_BRIDGE_EXPORT_DIR` | `~/tg-bridge-data/exports` | Markdown exports |
 | `TG_BRIDGE_DOWNLOAD_DIR` | `~/tg-bridge-data/downloads` | Downloaded media |
 | `TG_BRIDGE_MAX_DOWNLOAD_MB` | `200` | Largest file download_media fetches (MB) |
+| `TG_BRIDGE_SCOPE` | `public` | `all`: every chat. `public`: public channels/supergroups plus the private groups switched on in the allowlist page; never 1:1 chats or bots |
+| `TG_BRIDGE_ADMIN_PORT` | `8765` | Port of the allowlist page (`tg-bridge-admin`), bound to `127.0.0.1` only |
+
+### Allowlist page
+
+For `public` scope, the owner switches private groups and channels on or off in a small web page:
+
+```
+uv run tg-bridge-admin
+```
+
+Open the `http://127.0.0.1:<port>/login?token=...` link it prints (the link sets a cookie; without it every
+request is refused). The page lists your private groups and channels with icon, title, kind and a `t.me/c/...`
+link; new ones start off, and a switch applies on the next tool call. It reads Telegram only at start and on
+Refresh, so it does not keep the session locked while LM Studio works. If the session is busy, press Refresh
+again in a moment.
+
+From the phone: run `tailscale serve --bg <port>` on the Mac, then open the same login path on the Mac's tailnet name.
+The page stays bound to `127.0.0.1`; only your tailnet devices can reach it, and they still need the login link.
 
 ## 5. Troubleshooting
 

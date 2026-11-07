@@ -687,3 +687,23 @@ def test_anonymous_admin_of_a_group_gets_no_username():
 def test_message_comment_count_only_for_channel_comments(replies, expected):
     # Telegram sends the count with every channel post, so showing it costs no request.
     assert message_from_tl(tl_msg(replies=replies), -1001234567890).comment_count == expected
+
+
+def test_collectible_username_makes_channel_public():
+    usernames = [tl.Username(username="a", active=False), tl.Username(username="b", active=True)]
+    chat = chat_from_dialog(dialog(tl_channel(broadcast=True, username=None, usernames=usernames)))
+
+    assert chat.username == "b"
+
+
+def test_no_active_collectible_username_stays_private():
+    usernames = [tl.Username(username="a", active=False)]
+
+    assert chat_from_dialog(dialog(tl_channel(broadcast=True, usernames=usernames))).username is None
+
+
+def test_plain_username_wins_over_collectible():
+    usernames = [tl.Username(username="b", active=True)]
+    chat = chat_from_dialog(dialog(tl_channel(megagroup=True, username="main", usernames=usernames)))
+
+    assert chat.username == "main"
