@@ -121,3 +121,50 @@ All constraints from plans 00–16 still apply. Additionally:
 ### Finish (maintainer)
 - Smoke checklist from the brief, including: LM Studio without `TG_BRIDGE_SCOPE` → no DMs; with `all` → everything.
 - Roadmap: 17 `[x]`, Log line(s) for deviations.
+
+---
+
+## Revision A (after the first smoke, 2026-11-07, agreed with the maintainer)
+
+Smoke showed: `public` hides DMs as designed, the page works and a switched-on group appears in LM Studio. The owner then changed the rule: **public always, every private chat only with permission**, people included. Brief updated accordingly. Implement on top of the existing code, same branch, TDD.
+
+### A1. Policy (`tg_bridge/scope.py`)
+```python
+def is_public(chat: Chat) -> bool:
+    return chat.kind in ("channel", "supergroup") and bool(chat.username)   # a person's @username never counts
+
+def chat_visible(chat: Chat, allowlist: frozenset[int]) -> bool:
+    if is_public(chat): return True
+    if chat.kind in ("user", "bot", "group", "channel", "supergroup"): return chat.id in allowlist
+    return False                                                            # unknown kind: fail closed
+
+def needs_allowlist(chat: Chat) -> bool:
+    return not is_public(chat) and chat.kind in ("user", "bot", "group", "channel", "supergroup")
+```
+Tests: every kind off/on; a user with a username and a bot with a username are hidden when off; self chat off/on; unknown kind hidden even if its id is in the allowlist.
+
+### A2. Models and mapping
+- `Chat` gets `is_self: bool = False` (the Saved Messages dialog: Telethon `User.is_self`) and `is_creator: bool = False` (`Channel.creator` / `Chat.creator`; always False for users), and `photo_id: int | None = None` (`entity.photo.photo_id` when the photo is a `ChatPhoto`/`UserProfilePhoto`, else None). All from the dialog entity, no extra requests.
+- `chat_from_dialog` sets them; for the self dialog keep `kind="user"` and set the title to `"Saved Messages"` (Telethon shows the own name otherwise).
+- `DialogCache`: write the new fields; when reading, use `.get(field, default)` so an old cache file still loads.
+- Tests in `tests/telegram/test_mapping.py` and `tests/test_dialog_cache.py` (old dict without the keys loads with defaults).
+
+### A3. Tools text
+`SCOPE_NOTE` = `"This bridge runs in public scope: private chats (people, bots, private groups and channels) are available only when the owner has switched them on."` Update tests that match the old text. Existing scope tests that assert "DM never visible" become "DM hidden while off, visible when on"; add one tool test: a switched-on DM is readable with `get_messages`, a second DM that is off stays hidden.
+
+### A4. Admin page
+- **Tabs** via query param `tab=groups|channels|people|mine` (default `groups`; unknown → `groups`), as links at the top with counts, e.g. `Groups 41 · Channels 12 · People 803 · Mine 9`. Search (`q`) and folder filters apply inside the tab and are kept across tab links, toggles and refresh (`tab` joins `q`/`folder` in the kept fields).
+  - groups: `needs_allowlist` and kind `group`/`supergroup` (forums included);
+  - channels: `needs_allowlist` and kind `channel`;
+  - people: kind `user`/`bot`, not `is_self`;
+  - mine: `is_self` or `is_creator` (any kind). Own **public** chats appear here with an "always on" label and no switch.
+- **Toggle endpoint** accepts any `needs_allowlist` chat id from the snapshot (now incl. people, bots, self); still `400` for public or unknown ids.
+- **Links:** `t.me/c/<N>` for `-100N`; people/bots with a username → `https://t.me/<username>`; otherwise "no link".
+- **Confirmation:** the On button of a person, bot or Saved Messages row carries `data-confirm="1"`; the nonce'd script intercepts the submit of such forms with `confirm("The cloud model will be able to read this whole conversation. Switch it on?")`. Generic text, no chat data in JS. Server side needs nothing extra.
+- **Marking:** switched-on rows in People (and the self row) get a visible `shared with cloud` tag and an accent border.
+- **Photo disk cache:** dir `session_path.with_name(f"{stem}.photos")`, mode `0o700`, files `<chat_id>_<photo_id>.jpg` mode `0o600`. `fetch_snapshot` downloads only for listed chats (any tab, incl. people and own public chats in Mine) whose `photo_id` is set and whose file is missing; it deletes that chat's older files. `/photo/<id>` serves from disk for listed chats only. Log progress every 100 downloads (counts only). The snapshot no longer holds photo bytes; tests inject a temp photo dir.
+- **Refresh lock:** the script disables the Refresh button and shows "Refreshing…" on submit. Server side: if the last successful refresh finished less than 10 s ago, `POST /refresh` just redirects (no second fetch).
+- Tests in `tests/test_admin.py`: each tab lists the right chats (a chat in two tabs), tab kept across toggle/refresh redirects, a DM toggle on/off persists, public id still `400`, `data-confirm` present on people/self On buttons and absent on groups, "always on" row without a form in Mine, link forms (`t.me/c/…`, `t.me/<user>`, none), photo cache: second fetch downloads nothing when `photo_id` unchanged and re-downloads when it changed, refresh within 10 s does not call the fetcher.
+
+### A5. Docs
+`design.md` §7/§8 and `setup.md`: the new rule (public always; any private chat, people included, only when switched on), tabs, confirmation, photo cache dir.
