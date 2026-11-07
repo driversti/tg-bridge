@@ -1,0 +1,19 @@
+[Unit]
+Description=tg-bridge networked MCP (read-only Telegram bridge)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=yurii
+WorkingDirectory=/home/yurii/tg-bridge
+# Settings come from ~/.config/tg-bridge/config.env (load_settings reads it and checks it is 600).
+ExecStart=/home/yurii/.local/bin/uv run --frozen tg-bridge-net serve
+Restart=always
+RestartSec=10
+# 2 = config error, 3 = not logged in: restarting cannot fix either, and would spam login links.
+RestartPreventExitStatus=2 3
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
