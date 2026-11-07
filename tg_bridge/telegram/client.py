@@ -88,7 +88,7 @@ class ReadOnlyTelegram:
                 self._settings.api_hash,
                 receive_updates=False,
                 flood_sleep_threshold=FLOOD_SLEEP_THRESHOLD,
-                **client_identity(),
+                **client_identity(self._settings.device_name),
             )
         await self._call(self._client.connect)
         if not await self._call(self._client.is_user_authorized):

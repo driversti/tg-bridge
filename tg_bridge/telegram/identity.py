@@ -7,11 +7,11 @@ from tg_bridge import __version__
 _OS_NAMES = {"Darwin": "macOS"}
 
 
-def client_identity() -> dict[str, str]:
+def client_identity(device_name: str = "tg-bridge") -> dict[str, str]:
     """TelegramClient kwargs. Telethon's defaults expose the CPU architecture and kernel version."""
     system = platform.system()
     return {
-        "device_model": "tg-bridge",
+        "device_model": device_name,
         "system_version": _OS_NAMES.get(system, system),
         "app_version": __version__,
     }

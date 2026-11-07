@@ -66,6 +66,8 @@ Facts checked on LXC 110 (2026-11-07): Hermes **v0.23.0**, runs as `hermes-gatew
   ```
 - Creating the LXC itself is done at smoke time (with the owner, via the proxmox skill), not by the implement session.
 
+**Finding (Task 1):** Telethon sends `initConnection` with `device_model` on every connect, but whether Telegram renames an existing Devices entry on reconnect is unverified. To be checked in the smoke; `TG_BRIDGE_DEVICE_NAME` must be set before the first login to be safe.
+
 ## Out of scope
 - TLS for MCP on the LAN, OAuth, multiple tokens or per-client scopes.
 - Exposing anything to the internet; MCP over Tailscale.
