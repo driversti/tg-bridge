@@ -2,6 +2,7 @@
 name = "tg-bridge"
 version = "0.1.0"
 description = "Read-only MCP bridge between a local LLM and a personal Telegram account"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "telethon>=1.45,<2",

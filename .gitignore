@@ -7,6 +7,10 @@ config.env
 exports/
 downloads/
 
+# Local notes between agent sessions
+handoff.md
+HANDOFF*.md
+
 # Python
 .venv/
 __pycache__/
