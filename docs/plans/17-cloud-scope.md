@@ -87,7 +87,7 @@ All constraints from plans 00–16 still apply. Additionally:
 ### Task 5: Tools through ScopedSource
 - [ ] `tests/test_tools_scope.py` (real `tools.*` over `ScopedSource(FakeSource(...))`, settings with `public`), dialogs: one DM "Anna K", one bot, one public channel, one private group off, one private group on, one folder containing all of them:
   - `list_chats` shows only the public channel and the allowed group, ends with the scope note; `list_chats(kind="user")` → none + note.
-  - `get_messages(chat="Anna")` / by id / by `@anna_k` → not-found text without "Anna" in it (no suggestion leaks), with the scope note.
+  - `get_messages(chat="Anna")` / by id / by `@anna_k` → not-found text with the scope note and no suggestions; it may echo the argument the model typed, but never the hidden chat's real title, id or username when those were not in the argument (e.g. ask by id → no "Anna K" in the text).
   - Ambiguous name shared by a hidden and a visible chat → resolves to the visible one (no candidates list).
   - `list_folders` count and `list_chats(folder=…)` count only visible chats; `get_messages(folder=…)` and `search_messages(folder=…)` never show hidden chats.
   - Global `search_messages` with hits in the DM and in the channel → only the channel hit; `from_me=True` likewise.
