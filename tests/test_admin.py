@@ -44,7 +44,7 @@ def snapshot(**kw):
 
 
 class Harness:
-    def __init__(self, tmp_path, fetch):
+    def __init__(self, tmp_path, fetch, hidden=frozenset()):
         self.allowlist = Allowlist(tmp_path / "a.json")
         self.photo_dir = tmp_path / "photos"
         self.photo_dir.mkdir()
@@ -52,7 +52,8 @@ class Harness:
         self.now = 1000.0
         self._fetch = fetch
         self.app = AdminApp(
-            self._counted, self.allowlist, LOGIN, COOKIE, CSRF, photo_dir=self.photo_dir, clock=lambda: self.now
+            self._counted, self.allowlist, LOGIN, COOKIE, CSRF, photo_dir=self.photo_dir, clock=lambda: self.now,
+            hidden=hidden,
         )
         self.app.refresh()  # what main() does before it starts serving
         self.server = make_server(self.app, 0)
@@ -788,3 +789,25 @@ def test_malformed_token_file_exits_with_message(monkeypatch, tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         admin.main(["--link"])
     assert e.value.code == 2 and "--new-link" in capsys.readouterr().err
+
+
+# --- bot chat guard (feature 11) ---
+
+
+@pytest.fixture
+def guarded(tmp_path):
+    h = Harness(tmp_path, lambda: snapshot(), hidden=frozenset({BOT.id}))
+    yield h
+    h.close()
+
+
+def test_admin_bot_chat_locked_no_switch(guarded):
+    _, page = guarded.get("/?tab=people")
+    assert "locked (receives login links)" in page
+    assert f'name="chat_id" value="{BOT.id}"' not in page
+    assert f'name="chat_id" value="{DM.id}"' in page  # other people keep their switch
+
+
+def test_admin_post_toggle_bot_chat_400(guarded):
+    assert guarded.post("/toggle", form(BOT.id, "1", tab="people"))[0].status == 400
+    assert guarded.allowlist.load() == frozenset()

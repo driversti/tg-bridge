@@ -14,7 +14,10 @@ def is_public(chat: Chat) -> bool:
     return chat.kind in ("channel", "supergroup") and bool(chat.username)
 
 
-def chat_visible(chat: Chat, allowlist: frozenset[int]) -> bool:
+def chat_visible(chat: Chat, allowlist: frozenset[int], hidden: frozenset[int] = frozenset()) -> bool:
+    """`hidden` (e.g. the bot chat that receives login links) wins over the allowlist and over public."""
+    if chat.id in hidden:
+        return False
     if is_public(chat):
         return True
     if chat.kind in _KINDS:

@@ -254,7 +254,9 @@ class AdminApp:
         clock: Callable[[], float] = time.monotonic,
         lock: AbstractContextManager | None = None,
         photos: "PhotoWorker | None" = None,
+        hidden: frozenset[int] = frozenset(),
     ):
+        self.hidden = hidden  # chats that can never be switched on (e.g. the bot chat that gets login links)
         self._fetch = fetch
         self.allowlist = allowlist
         self.login_token = login_token
@@ -296,7 +298,7 @@ class AdminApp:
         return {c.id: c for c in (self.snapshot.chats if self.snapshot else []) if listed_on_page(c)}
 
     def switchable(self) -> dict[int, Chat]:
-        return {c.id: c for c in (self.snapshot.chats if self.snapshot else []) if needs_allowlist(c)}
+        return {c.id: c for c in (self.snapshot.chats if self.snapshot else []) if needs_allowlist(c) and c.id not in self.hidden}
 
     def photo_bytes(self, chat_id: int) -> bytes | None:
         """Only for chats the page lists, and only the file that matches the chat's current photo id."""
@@ -392,7 +394,9 @@ class AdminApp:
             if link
             else '<span class="meta">no link</span>'
         )
-        if always:
+        if chat.id in self.hidden:
+            switch = '<span class="tag">locked (receives login links)</span>'
+        elif always:
             switch = '<span class="tag">always on</span>'
         else:
             confirm = ' data-confirm="1"' if chat.kind in ("user", "bot") and not on else ""

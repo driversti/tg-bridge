@@ -21,9 +21,10 @@ MAX_TOPUP_ROUNDS = 5
 
 
 class ScopedSource:
-    def __init__(self, inner: MessageSource, allowlist: Allowlist):
+    def __init__(self, inner: MessageSource, allowlist: Allowlist, hidden: frozenset[int] = frozenset()):
         self._inner = inner
         self._allowlist = allowlist
+        self._hidden = hidden
 
     async def whoami(self) -> Person:
         return await self._inner.whoami()
@@ -34,7 +35,7 @@ class ScopedSource:
     async def list_dialogs(self, *, refresh: bool = False) -> list[Chat]:
         dialogs = await self._inner.list_dialogs(refresh=refresh)
         allowed = self._allowlist.load()
-        return [c for c in dialogs if chat_visible(c, allowed)]
+        return [c for c in dialogs if chat_visible(c, allowed, self._hidden)]
 
     async def list_folders(self, *, refresh: bool = False) -> list[Folder]:
         return await self._inner.list_folders(refresh=refresh)
