@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from telethon import helpers, utils
 from telethon.tl import types as tl
 
-from tg_bridge.source import Chat, ChatKind, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Topic
+from tg_bridge.source import Chat, ChatKind, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Post, Topic
 
 log = logging.getLogger(__name__)
 
@@ -183,6 +183,36 @@ def message_from_tl(msg, chat_id: int) -> Message | None:
         topic_id=topic_id,
         media=None if is_service else _media(msg),
         action=_action(msg) if is_service else None,
+    )
+
+
+def comment_from_tl(msg, chat_id: int) -> Message | None:
+    """A message of a channel post's comment thread; `chat_id` is the discussion group's marked id.
+
+    A top-level comment is technically a reply to the post's copy in the discussion group (the thread root), so
+    it carries no reply of its own; only a reply to another comment (reply_to_top_id set) keeps its target.
+    """
+    mapped = message_from_tl(msg, chat_id)
+    if mapped is None:
+        return None
+    header = msg.reply_to if isinstance(msg.reply_to, tl.MessageReplyHeader) else None
+    reply = None if header is None or header.reply_to_top_id is None else header.reply_to_msg_id
+    return dataclasses.replace(mapped, reply_to_id=reply, topic_id=None)
+
+
+def post_from_tl(msg, chat_id: int) -> Post | None:
+    """None for MessageEmpty and service messages (they have no comment thread)."""
+    if isinstance(msg, (tl.MessageEmpty, tl.MessageService)):
+        return None
+    mapped = message_from_tl(msg, chat_id)
+    replies = getattr(msg, "replies", None)
+    if not isinstance(replies, tl.MessageReplies) or not replies.comments or replies.channel_id is None:
+        return Post(mapped, comments_enabled=False, comment_count=None, discussion_id=None)
+    return Post(
+        mapped,
+        comments_enabled=True,
+        comment_count=replies.replies,
+        discussion_id=utils.get_peer_id(tl.PeerChannel(replies.channel_id)),
     )
 
 

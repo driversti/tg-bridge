@@ -132,6 +132,16 @@ class Message:
 
 
 @dataclass(frozen=True)
+class Post:
+    """A channel post plus what is known about its comment thread."""
+
+    message: Message  # the channel post itself
+    comments_enabled: bool  # replies is MessageReplies with comments=True
+    comment_count: int | None  # replies.replies; None when comments are off
+    discussion_id: int | None  # marked id of the discussion supergroup (-100N); None when comments are off
+
+
+@dataclass(frozen=True)
 class MessageQuery:
     direction: Literal["forward", "backward"]
     start: datetime | None

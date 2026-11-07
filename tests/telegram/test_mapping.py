@@ -585,3 +585,70 @@ def test_empty_title_gets_placeholder():
     emoji_only = tl.TextWithEntities("⭐", [tl.MessageEntityCustomEmoji(offset=0, length=1, document_id=1)])
 
     assert folder_from_tl(tl_filter(id=7, title=emoji_only), self_id=1).title == "(folder 7)"
+
+
+# --- channel posts and comments ------------------------------------------
+
+from tg_bridge.source import Post  # noqa: E402
+from tg_bridge.telegram.mapping import comment_from_tl, post_from_tl  # noqa: E402
+
+DISCUSSION = -1000000000555
+
+
+def test_comment_replying_to_thread_root_has_no_reply():
+    header = tl.MessageReplyHeader(reply_to_msg_id=900, reply_to_top_id=None)
+
+    msg = comment_from_tl(tl_msg(id=5012, reply_to=header), DISCUSSION)
+
+    assert (msg.id, msg.chat_id, msg.reply_to_id) == (5012, DISCUSSION, None)
+
+
+def test_comment_replying_to_comment_keeps_reply():
+    header = tl.MessageReplyHeader(reply_to_msg_id=5008, reply_to_top_id=900)
+
+    assert comment_from_tl(tl_msg(reply_to=header), DISCUSSION).reply_to_id == 5008
+
+
+def test_comment_without_header_has_no_reply():
+    assert comment_from_tl(tl_msg(), DISCUSSION).reply_to_id is None
+
+
+def test_comment_sender_and_anonymous_title():
+    anna = comment_from_tl(tl_msg(sender=tl_user(id=5)), DISCUSSION)
+    assert anna.sender.display_name == "Anna K" and anna.sender_title is None
+    channel = tl.Channel(id=1, title="Some Channel", photo=tl.ChatPhotoEmpty(), date=SENT)
+    anon = comment_from_tl(tl_msg(sender=channel), DISCUSSION)
+    assert anon.sender is None and anon.sender_title == "Some Channel"
+
+
+def test_comment_empty_is_none():
+    assert comment_from_tl(tl.MessageEmpty(id=1, peer_id=tl.PeerChannel(10)), DISCUSSION) is None
+
+
+def test_post_with_comments():
+    replies = tl.MessageReplies(replies=137, replies_pts=1, comments=True, channel_id=555)
+
+    post = post_from_tl(tl_msg(id=3186, text="post", replies=replies), -1001234567890)
+
+    assert isinstance(post, Post)
+    assert (post.message.id, post.comments_enabled, post.comment_count, post.discussion_id) == (3186, True, 137, DISCUSSION)
+
+
+def test_post_without_replies_has_comments_off():
+    post = post_from_tl(tl_msg(id=3186), -1001234567890)
+
+    assert (post.comments_enabled, post.comment_count, post.discussion_id) == (False, None, None)
+
+
+def test_post_with_group_style_replies_has_comments_off():
+    replies = tl.MessageReplies(replies=3, replies_pts=1, comments=False)
+
+    post = post_from_tl(tl_msg(replies=replies), -1001234567890)
+
+    assert (post.comments_enabled, post.comment_count, post.discussion_id) == (False, None, None)
+
+
+def test_post_empty_and_service_are_none():
+    assert post_from_tl(tl.MessageEmpty(id=1, peer_id=tl.PeerChannel(10)), 1) is None
+    service = tl.MessageService(id=2, peer_id=tl.PeerChannel(10), date=SENT, action=tl.MessageActionChatEditPhoto(photo=tl.PhotoEmpty(id=0)))
+    assert post_from_tl(service, 1) is None
