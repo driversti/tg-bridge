@@ -136,6 +136,7 @@ def build_server(
         from_me: bool = False,
         cursor: str | None = None,
         around: int | None = None,
+        comments_of: int | None = None,
         limit: int | None = None,
     ) -> str:
         """Read one chat (`chat`: numeric id, @username, or words from the title) or a whole chat folder (`folder`: id or
@@ -154,11 +155,17 @@ def build_server(
         chat or folder and cursor character for character (other arguments, including mode, come from the cursor).
         To read a whole period, keep calling until the result ends with "End of period."
         `around`: a message #id (e.g. from search_messages): shows the messages just before and after it;
-        period, topic and from_me are then ignored."""
+        period, topic and from_me are then ignored.
+        `comments_of`: a post #id of a channel: reads the comments under that post, oldest first (no need to join the
+        discussion group). Each line has the author's link and the comment's link. Period args filter by comment date.
+        For a series of posts (e.g. weekly check-ins): first `search_messages(query=<title words or #hashtag>,
+        chat=<channel>, since=…)` to list the posts, then `get_messages(chat=<channel>, comments_of=<post id>)` for
+        each post, and keep calling until the result ends with "End of comments"."""
         return await stamped(
             lambda m: tools.get_messages(
                 source, budget, chat, folder=folder, mode=mode, days=days, since=since, until=until, period=period,
-                topic=topic, from_me=from_me, cursor=cursor, around=around, limit=limit, now=lambda: m,
+                topic=topic, from_me=from_me, cursor=cursor, around=around, comments_of=comments_of, limit=limit,
+                now=lambda: m,
             )
         )
 

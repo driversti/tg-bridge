@@ -103,9 +103,30 @@ async def test_get_messages_tool_schema(settings):
 
     props = tools["get_messages"].input_schema["properties"]
     assert set(props) == {
-        "chat", "folder", "mode", "days", "since", "until", "period", "topic", "from_me", "cursor", "around", "limit"
+        "chat", "folder", "mode", "days", "since", "until", "period", "topic", "from_me", "cursor", "around",
+        "comments_of", "limit",
     }
+    assert props["comments_of"]["anyOf"][0]["type"] == "integer"
+    assert "comments_of" in tools["get_messages"].description and "End of comments" in tools["get_messages"].description
     assert "required" not in tools["get_messages"].input_schema or tools["get_messages"].input_schema["required"] == []
+
+
+async def test_call_get_messages_comments_of(settings):
+    from datetime import UTC, datetime
+
+    from tests.fakes import make_chat, make_message
+    from tg_bridge.source import Post
+
+    channel = make_chat(id=-1001234567890, kind="channel", title="imatrofAI", username="imatrofAI")
+    when = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
+    post = Post(make_message(id=3186, chat_id=channel.id, date=when, text="check-in"), True, 1, -1000000000555)
+    comment = make_message(id=5012, chat_id=-1000000000555, date=when, text="my bot")
+    src = FakeSource(dialogs=[channel], posts={(channel.id, 3186): post}, comments={(channel.id, 3186): [comment]})
+
+    result = await build(src, settings).call_tool("get_messages", {"chat": "imatrofAI", "comments_of": 3186})
+
+    text = result.content[0].text
+    assert "Comments on post #3186" in text and "#5012 " in text and "End of comments on post #3186." in text
 
 
 async def test_call_get_messages_folder_headlines(settings):
