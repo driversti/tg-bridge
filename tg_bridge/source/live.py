@@ -6,7 +6,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, Post, SearchQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
 
 log = logging.getLogger(__name__)
@@ -95,6 +95,14 @@ class LiveSource:
     async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
         await self._ensure_connected()
         return await self._telegram.get_messages(chat, query)
+
+    async def get_post(self, chat: Chat, post_id: int) -> Post | None:
+        await self._ensure_connected()
+        return await self._telegram.get_post(chat, post_id)
+
+    async def get_comments(self, chat: Chat, post: Post, query: MessageQuery) -> list[Message]:
+        await self._ensure_connected()
+        return await self._telegram.get_comments(chat, post, query)
 
     async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         await self._ensure_connected()

@@ -197,7 +197,7 @@ def test_public_surface_is_read_only():
 
     assert public == {
         "connect", "get_me", "disconnect", "list_dialogs", "list_folders", "get_chat_details", "get_messages", "search",
-        "get_media_files", "read_media",
+        "get_media_files", "read_media", "get_post", "get_comments",
     }
 
 

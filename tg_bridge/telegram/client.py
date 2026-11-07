@@ -12,12 +12,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from telethon import TelegramClient, utils
-from telethon.errors import FloodError, RPCError
+from telethon.errors import ChannelPrivateError, ChatAdminRequiredError, FloodError, MsgIdInvalidError, RPCError
 from telethon.tl import functions
 from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
-from tg_bridge.errors import MessageNotFoundError, NotLoggedInError, RateLimitedError
+from tg_bridge.errors import CommentsUnavailableError, MessageNotFoundError, NotLoggedInError, RateLimitedError
 from tg_bridge.source import (
     MEDIA_CHUNK,
     Chat,
@@ -27,6 +27,7 @@ from tg_bridge.source import (
     Message,
     MessageQuery,
     Person,
+    Post,
     SearchOffset,
     SearchQuery,
     Topic,
@@ -34,11 +35,13 @@ from tg_bridge.source import (
 from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import (
     chat_from_dialog,
+    comment_from_tl,
     folder_from_tl,
     largest_photo_size,
     media_file_from_tl,
     message_from_tl,
     person_from_user,
+    post_from_tl,
     topic_from_forum_topic,
 )
 
@@ -230,6 +233,56 @@ class ReadOnlyTelegram:
             "read %d messages from %d (%s) in %.2f s", len(messages), chat.id, query.direction, time.monotonic() - started
         )
         return messages
+
+    async def get_post(self, chat: Chat, post_id: int) -> Post | None:
+        """One channel post with its comment-thread info; None for an unknown id or a service message."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        raw = await self._fetch_message(client, entity, post_id)
+        return None if raw is None else post_from_tl(raw, chat.id)
+
+    async def get_comments(self, chat: Chat, post: Post, query: MessageQuery) -> list[Message]:
+        """At most query.limit comments of `post`, oldest first (messages.GetReplies: no membership needed).
+        Comments carry the discussion group's chat id."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        post_id = post.message.id
+        kwargs: dict[str, Any] = {
+            "limit": None,  # stopped by hand: end date and query.limit
+            "reverse": True,
+            "reply_to": post_id,
+            "offset_date": query.start,
+            "offset_id": query.boundary_id or 0,  # "ids greater than"; takes priority over offset_date
+        }
+        _no_page_sleeps(kwargs, query.limit)
+        started = time.monotonic()
+
+        async def collect() -> list[Message]:
+            found: list[Message] = []
+            if query.limit <= 0:
+                return found
+            try:
+                async for raw in client.iter_messages(entity, **kwargs):
+                    msg = comment_from_tl(raw, post.discussion_id)
+                    if msg is None:
+                        continue
+                    if query.end is not None and msg.date >= query.end:
+                        break
+                    if query.start is not None and msg.date < query.start:
+                        continue
+                    found.append(msg)
+                    if len(found) >= query.limit:
+                        break
+            except (MsgIdInvalidError, ChannelPrivateError, ChatAdminRequiredError) as e:
+                log.warning("comments of post %d in %d refused: %s", post_id, chat.id, type(e).__name__)
+                raise CommentsUnavailableError from e
+            return found
+
+        comments = await self._call(collect)
+        log.info(
+            "read %d comments of post %d in %d in %.2f s", len(comments), post_id, chat.id, time.monotonic() - started
+        )
+        return comments
 
     async def search(self, query: SearchQuery, chat: Chat | None) -> list[Message]:
         """At most query.limit text hits, newest first: one chat via messages.Search, all dialogs via

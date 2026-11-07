@@ -70,16 +70,33 @@ class PeriodError(TgBridgeError):
     """The period arguments of a read tool are invalid. The message tells the model how to fix them."""
 
 
+class CommentsUnavailableError(TgBridgeError):
+    """Telegram refuses to show a post's comment thread to this account; the tools layer words the final text."""
+
+    def __init__(self) -> None:
+        super().__init__("Telegram does not show these comments to this account")
+
+
 class CursorError(TgBridgeError):
     """The paging cursor is garbled, from another version, or otherwise unusable."""
 
     def __init__(
-        self, other_chat: bool = False, other_query: bool = False, tool: str = "get_messages", other_folder: bool = False
+        self,
+        other_chat: bool = False,
+        other_query: bool = False,
+        tool: str = "get_messages",
+        other_folder: bool = False,
+        other_post: bool = False,
     ) -> None:
         # Models mix up cursors between chats and queries; naming the mistake lets them fix it instead of starting over.
         if other_chat:
             super().__init__(
                 f"This cursor belongs to another chat. Use the cursor from this chat's last result, "
+                f"or call {tool} again without cursor."
+            )
+        elif other_post:
+            super().__init__(
+                f"This cursor belongs to another post's comments. Use the cursor from this thread's last result, "
                 f"or call {tool} again without cursor."
             )
         elif other_folder:
@@ -97,6 +114,7 @@ class CursorError(TgBridgeError):
         self.other_chat = other_chat
         self.other_query = other_query
         self.other_folder = other_folder
+        self.other_post = other_post
 
 
 class TooManyMessagesError(TgBridgeError):
