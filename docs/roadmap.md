@@ -23,7 +23,7 @@ pre-plan future features here.
 | 02 | Reading: `get_messages` + periods, budget, pagination | [features/02-reading.md](features/02-reading.md) · [plan](plans/02-reading.md) | 01 | [x] |
 | 03 | Search: `search_messages` | [features/03-search.md](features/03-search.md) · [plan](plans/03-search.md) | 02 | [x] |
 | 04 | Export: `export_chat` → Markdown | [features/04-export.md](features/04-export.md) · [plan](plans/04-export.md) | 02 | [x] |
-| 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) | 04 | [ ] |
+| 05 | Deleted users: `find_deleted_users`, `export_deleted_users` | [features/05-deleted-users.md](features/05-deleted-users.md) · [plan](plans/05-deleted-users.md) | 04 | [~] |
 | 06 | Media: `download_media` | [features/06-media.md](features/06-media.md) · [plan](plans/06-media.md) | 02 | [x] |
 | 07 | Folders: `list_folders`, `list_chats(folder=)`, folders in `get_chat_info` | [features/07-folders.md](features/07-folders.md) · [plan](plans/07-folders.md) | 01 | [x] |
 | 08 | Folder queries: `search_messages(folder=)`, `get_messages(folder=)`, `mode="headlines"` + dedupe | [features/08-folder-queries.md](features/08-folder-queries.md) · [plan](plans/08-folder-queries.md) | 07, 03 | [x] |
