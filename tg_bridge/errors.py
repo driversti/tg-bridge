@@ -70,11 +70,35 @@ class PeriodError(TgBridgeError):
     """The period arguments of a read tool are invalid. The message tells the model how to fix them."""
 
 
-class CommentsUnavailableError(TgBridgeError):
-    """Telegram refuses to show a post's comment thread to this account; the tools layer words the final text."""
+# Telegram error codes a read can hit, in words a model can act on. Codes only: they never carry PII.
+_REFUSAL_REASONS = {
+    "CHANNEL_PRIVATE": "the channel or its discussion group is private, or this account was removed or banned there",
+    "CHANNEL_INVALID": "this account cannot open the channel (it left, the channel is gone, or the id is stale)",
+    "PEER_ID_INVALID": "this account cannot open that chat (it left, the chat is gone, or the id is stale)",
+    "CHAT_ADMIN_REQUIRED": "only admins can see this",
+    "CHAT_FORBIDDEN": "this account has no access to that chat",
+    "MSG_ID_INVALID": "Telegram does not know this message id there (deleted, or older than the linked discussion group)",
+    "USER_BANNED_IN_CHANNEL": "this account is banned there",
+}
+
+
+class SessionBusyError(TgBridgeError):
+    """Another process holds the Telethon SQLite session's write lock."""
 
     def __init__(self) -> None:
-        super().__init__("Telegram does not show these comments to this account")
+        super().__init__(
+            "The Telegram session file is busy: another tg-bridge process is using it (e.g. Claude Code and "
+            "LM Studio at the same time). Close the other app's tg-bridge, then retry."
+        )
+
+
+class TelegramRefusedError(TgBridgeError):
+    """Telegram answered a read with an error (not a rate limit). `code` is Telegram's own, e.g. CHANNEL_PRIVATE."""
+
+    def __init__(self, code: str):
+        self.code = code
+        self.reason = _REFUSAL_REASONS.get(code, "Telegram did not say why")
+        super().__init__(f"Telegram refused the request: {self.reason} ({code}).")
 
 
 class CursorError(TgBridgeError):

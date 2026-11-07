@@ -6,18 +6,26 @@ the MCP transport owns), never sends read receipts or status updates.
 
 import itertools
 import logging
+import re
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from telethon import TelegramClient, utils
-from telethon.errors import ChannelPrivateError, ChatAdminRequiredError, FloodError, MsgIdInvalidError, RPCError
+from telethon.errors import FloodError, RPCError
 from telethon.tl import functions
 from telethon.tl import types as tl
 
 from tg_bridge.config import Settings
-from tg_bridge.errors import CommentsUnavailableError, MessageNotFoundError, NotLoggedInError, RateLimitedError
+from tg_bridge.errors import (
+    MessageNotFoundError,
+    NotLoggedInError,
+    RateLimitedError,
+    SessionBusyError,
+    TelegramRefusedError,
+)
 from tg_bridge.source import (
     MEDIA_CHUNK,
     Chat,
@@ -123,9 +131,9 @@ class ReadOnlyTelegram:
                 settings = await self._call(
                     lambda peer=peer: client(functions.account.GetNotifySettingsRequest(peer))
                 )
-            except (RPCError, RateLimitedError) as e:
+            except (TelegramRefusedError, RateLimitedError) as e:
                 # Only the "muted" flag of chats without an own setting depends on it; not worth failing the list.
-                log.warning("notify defaults unavailable for %s: %s", category, type(e).__name__)
+                log.warning("notify defaults unavailable for %s: %s", category, _error_name(e))
                 continue
             defaults[category] = settings.mute_until
         return defaults
@@ -163,9 +171,9 @@ class ReadOnlyTelegram:
                 members = getattr(full.full_chat, "participants_count", None)
                 if chat.is_forum:
                     topics, topics_total = await self._forum_topics(client, entity)
-        except RPCError as e:
+        except TelegramRefusedError as e:
             # E.g. ChannelPrivateError for a chat we were removed from: the dialog data is still worth showing.
-            log.warning("chat details unavailable for %d: %s", chat.id, type(e).__name__)
+            log.warning("chat details unavailable for %d: %s", chat.id, _error_name(e))
             description, members, topics, topics_total = None, None, [], None
         return ChatInfo(
             chat=chat,
@@ -261,21 +269,17 @@ class ReadOnlyTelegram:
             found: list[Message] = []
             if query.limit <= 0:
                 return found
-            try:
-                async for raw in client.iter_messages(entity, **kwargs):
-                    msg = comment_from_tl(raw, post.discussion_id)
-                    if msg is None:
-                        continue
-                    if query.end is not None and msg.date >= query.end:
-                        break
-                    if query.start is not None and msg.date < query.start:
-                        continue
-                    found.append(msg)
-                    if len(found) >= query.limit:
-                        break
-            except (MsgIdInvalidError, ChannelPrivateError, ChatAdminRequiredError) as e:
-                log.warning("comments of post %d in %d refused: %s", post_id, chat.id, type(e).__name__)
-                raise CommentsUnavailableError from e
+            async for raw in client.iter_messages(entity, **kwargs):
+                msg = comment_from_tl(raw, post.discussion_id)
+                if msg is None:
+                    continue
+                if query.end is not None and msg.date >= query.end:
+                    break
+                if query.start is not None and msg.date < query.start:
+                    continue
+                found.append(msg)
+                if len(found) >= query.limit:
+                    break
             return found
 
         comments = await self._call(collect)
@@ -432,6 +436,10 @@ class ReadOnlyTelegram:
             seconds = int(getattr(e, "seconds", 0) or 0)
             log.warning("telegram flood wait: %d s", seconds)
             raise RateLimitedError(seconds) from e
+        except RPCError as e:
+            code = _rpc_code(e)
+            log.warning("telegram refused a download: %s", code)
+            raise TelegramRefusedError(code) from e
 
     async def _fetch_message(self, client: Any, entity: Any, message_id: int) -> Any | None:
         # Passing the entity matters: in private chats and basic groups ids are account-wide, and Telethon then
@@ -483,6 +491,36 @@ class ReadOnlyTelegram:
             seconds = int(getattr(e, "seconds", 0) or 0)
             log.warning("telegram flood wait: %d s", seconds)
             raise RateLimitedError(seconds) from e
+        except RPCError as e:
+            # Any other refusal becomes a reason the model can act on (skip, try another chat), not a crash.
+            code = _rpc_code(e)
+            log.warning("telegram refused: %s", code)
+            raise TelegramRefusedError(code) from e
+        except sqlite3.OperationalError as e:
+            # Telethon keeps the session's write transaction open between saves, so a second long-lived process on
+            # the same session file locks the others out.
+            if "locked" not in str(e):
+                raise
+            log.warning("telegram session is locked by another process")
+            raise SessionBusyError() from e
+
+
+# Telethon's generic bases carry the real code in `.message`; its named subclasses only in the class name.
+_GENERIC_RPC = {"RPCError", "InvalidDCError", "BadRequestError", "UnauthorizedError", "ForbiddenError", "NotFoundError",
+                "AuthKeyError", "FloodError", "ServerError", "TimedOutError"}
+
+
+def _rpc_code(e: RPCError) -> str:
+    """Telegram's error code, e.g. ChannelPrivateError -> CHANNEL_PRIVATE."""
+    name = type(e).__name__
+    if name in _GENERIC_RPC:
+        return str(e.message or "UNKNOWN")
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name.removesuffix("Error")).upper()
+
+
+def _error_name(e: Exception) -> str:
+    """The original Telethon class name for logs (the cause of a TelegramRefusedError)."""
+    return type(e.__cause__ or e).__name__
 
 
 # Telethon's own threshold: above it iter_messages does not sleep between history pages.

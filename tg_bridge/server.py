@@ -136,7 +136,6 @@ def build_server(
         from_me: bool = False,
         cursor: str | None = None,
         around: int | None = None,
-        comments_of: int | None = None,
         limit: int | None = None,
     ) -> str:
         """Read one chat (`chat`: numeric id, @username, or words from the title) or a whole chat folder (`folder`: id or
@@ -156,16 +155,40 @@ def build_server(
         To read a whole period, keep calling until the result ends with "End of period."
         `around`: a message #id (e.g. from search_messages): shows the messages just before and after it;
         period, topic and from_me are then ignored.
-        `comments_of`: a post #id of a channel: reads the comments under that post, oldest first (no need to join the
-        discussion group). Each line has the author's link and the comment's link. Period args filter by comment date.
-        For a series of posts (e.g. weekly check-ins): first `search_messages(query=<title words or #hashtag>,
-        chat=<channel>, since=…)` to list the posts, then `get_messages(chat=<channel>, comments_of=<post id>)` for
-        each post, and keep calling until the result ends with "End of comments"."""
+        Comments under a channel post: use get_comments."""
         return await stamped(
             lambda m: tools.get_messages(
                 source, budget, chat, folder=folder, mode=mode, days=days, since=since, until=until, period=period,
-                topic=topic, from_me=from_me, cursor=cursor, around=around, comments_of=comments_of, limit=limit,
+                topic=topic, from_me=from_me, cursor=cursor, around=around, limit=limit,
                 now=lambda: m,
+            )
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=False)
+    async def get_comments(
+        chat: str,
+        post: int | None = None,
+        days: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        period: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> str:
+        """Read the comments under a channel post (what people replied in the post's discussion), oldest first;
+        works without joining the discussion group. `chat`: the channel (id, @username or title words).
+        `post`: the post's #id (from get_messages or search_messages; a "💬37" on a post line means 37 comments).
+        Each line starts with the comment's own #id and has the author's link and the comment's link; "↩#5008" at
+        the end only adds that this comment answers comment #5008.
+        Period (`period`, `days` or `since`/`until`, as in get_messages) filters by comment date; none = whole thread.
+        If the result ends with "Next: call get_comments(...)", make exactly that call (copy chat and cursor
+        character for character) and keep calling until the result ends with "End of comments".
+        For a series of posts (e.g. weekly check-ins): first search_messages(query=<title words or #hashtag>,
+        chat=<channel>, since=…) to list the posts, then get_comments(chat=<channel>, post=<id>) for each post."""
+        return await stamped(
+            lambda m: tools.get_comments(
+                source, budget, chat, post, days=days, since=since, until=until, period=period, cursor=cursor,
+                limit=limit, now=lambda: m,
             )
         )
 

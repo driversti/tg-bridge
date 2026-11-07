@@ -652,3 +652,38 @@ def test_post_empty_and_service_are_none():
     assert post_from_tl(tl.MessageEmpty(id=1, peer_id=tl.PeerChannel(10)), 1) is None
     service = tl.MessageService(id=2, peer_id=tl.PeerChannel(10), date=SENT, action=tl.MessageActionChatEditPhoto(photo=tl.PhotoEmpty(id=0)))
     assert post_from_tl(service, 1) is None
+
+
+def test_comment_replying_to_root_explicitly_has_no_reply():
+    # A reply aimed at the post's copy itself (msg id == top id) is still a top-level comment.
+    header = tl.MessageReplyHeader(reply_to_msg_id=900, reply_to_top_id=900)
+
+    assert comment_from_tl(tl_msg(reply_to=header), DISCUSSION).reply_to_id is None
+
+
+def test_comment_from_a_channel_keeps_its_username():
+    channel = tl.Channel(id=1, title="Some Channel", photo=tl.ChatPhotoEmpty(), date=SENT, broadcast=True, username="somechan")
+
+    msg = comment_from_tl(tl_msg(sender=channel), DISCUSSION)
+
+    assert (msg.sender_title, msg.sender_username) == ("Some Channel", "somechan")
+
+
+def test_anonymous_admin_of_a_group_gets_no_username():
+    group = tl.Channel(id=1, title="Discussion", photo=tl.ChatPhotoEmpty(), date=SENT, megagroup=True, username="disc")
+
+    assert comment_from_tl(tl_msg(sender=group), DISCUSSION).sender_username is None
+
+
+@pytest.mark.parametrize(
+    "replies, expected",
+    [
+        (tl.MessageReplies(replies=37, replies_pts=1, comments=True, channel_id=555), 37),
+        (tl.MessageReplies(replies=0, replies_pts=1, comments=True, channel_id=555), 0),
+        (tl.MessageReplies(replies=3, replies_pts=1, comments=False), None),
+        (None, None),
+    ],
+)
+def test_message_comment_count_only_for_channel_comments(replies, expected):
+    # Telegram sends the count with every channel post, so showing it costs no request.
+    assert message_from_tl(tl_msg(replies=replies), -1001234567890).comment_count == expected

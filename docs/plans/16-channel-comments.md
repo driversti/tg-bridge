@@ -24,6 +24,8 @@ All constraints from plans 00–09 still apply. Additionally:
 
 ## Decisions taken here (Claude's calls unless marked)
 
+- **Changed after the first smoke test (2026-11-07, agreed with the maintainer):** `comments_of` on `get_messages` became its own tool `get_comments(chat, post?, period…, cursor?, limit?)`, and channel post lines show `💬N` plus one ready `get_comments` call per page. The model never found the parameter. The decisions below still describe the behaviour; read `comments_of` as `get_comments(post=…)`. A comments cursor passed to `get_messages` is refused with the exact `get_comments` call to make instead.
+
 - **Arguments**
   - `get_messages(chat, comments_of=<int>, period…, cursor?, limit?)`. `comments_of` needs `chat` (the channel). Period args (`period`/`days`/`since`/`until`) filter by comment date.
   - Rejected with `comments_of`, one error each, naming the argument: `folder`, `topic`, `around`, `from_me`, `mode="headlines"`. Text: `comments_of cannot be combined with <arg>.` (`from_me` adds nothing useful in someone else's thread; the brief says reject.)

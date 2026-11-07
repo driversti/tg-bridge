@@ -48,25 +48,25 @@ def encode_cursor(c: Cursor) -> str:
     return "_".join(parts)
 
 
-def decode_cursor(s: str, chat_id: int) -> Cursor:
+def decode_cursor(s: str, chat_id: int, tool: str = "get_messages") -> Cursor:
     """Parse a token for `chat_id`; CursorError if it is malformed or was issued for another chat."""
     head, *rest = s.strip().strip("\"'`").strip().split("_")
     if not (m := _HEAD.fullmatch(head)):
-        raise CursorError()
+        raise CursorError(tool=tool)
     fields: dict[str, str] = {}
     for part in rest:
         f = _FIELD.fullmatch(part)
         key = "m" if f and f.group(1) is None else (f.group(1) if f else None)
         if key is None or key in fields:
-            raise CursorError()
+            raise CursorError(tool=tool)
         fields[key] = f.group(2) or ""
     if "t" in fields and "p" in fields:
-        raise CursorError()
+        raise CursorError(tool=tool)
     tag = fields.get("c")
     if tag is None or len(tag) != 3:
-        raise CursorError()
+        raise CursorError(tool=tool)
     if tag != _tag(chat_id):
-        raise CursorError(other_chat=True)
+        raise CursorError(other_chat=True, tool=tool)
     return Cursor(
         chat_id=chat_id,
         direction="forward" if m.group(1) == "f" else "backward",

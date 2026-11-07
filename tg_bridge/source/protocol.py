@@ -37,7 +37,7 @@ class MessageSource(Protocol):
 
     async def get_comments(self, chat: Chat, post: Post, query: MessageQuery) -> list[Message]:
         """At most `query.limit` comments of `post`, oldest first (forward only), period and id boundary applied.
-        Comments carry the discussion group's chat id. Raises CommentsUnavailableError when Telegram refuses."""
+        Comments carry the discussion group's chat id. Raises TelegramRefusedError when Telegram refuses."""
         ...
 
     async def search_messages(self, query: SearchQuery, chat: Chat | None) -> list[Message]:

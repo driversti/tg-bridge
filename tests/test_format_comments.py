@@ -90,7 +90,7 @@ def render(comments, max_chars=12000, more=False):
     return render_page(
         "HEAD", comments, tz=W, max_chars=max_chars, keep="oldest", more=more,
         next_hint=lambda last: f"More comments remain. Next: after #{last.id}", end_text="End of comments on post #3186.",
-        empty_text="No comments on post #3186.", line_of=comment_line_of(CHANNEL, 3186),
+        empty_text="No comments on post #3186.", line_of=comment_line_of(CHANNEL, 3186), noun="comment",
     )
 
 
@@ -114,3 +114,16 @@ def test_oversize_comment_falls_back_to_cut():
     out = render([comment(1, text="z" * 4000)], max_chars=2000)
 
     assert len(out) <= 2000 and "Next:" in out
+
+
+def test_line_channel_author_with_username_gets_link():
+    msg = comment(sender=None, sender_title="Some Channel", sender_username="somechan")
+
+    assert " Some Channel (https://t.me/somechan): " in line(msg)
+
+
+def test_page_footer_counts_comments():
+    out = render([comment(1, 14), comment(2, 15)])
+
+    assert out.splitlines()[-1].startswith("Shown 2 comments (")
+    assert render([comment(1, 14)]).splitlines()[-1].startswith("Shown 1 comment (")

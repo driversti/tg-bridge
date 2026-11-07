@@ -151,7 +151,8 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 | `list_chats(query?, kind?, limit=30, folder?, min_folders?)` | Find/browse dialogs (incl. archived); `folder` (id or title words) limits to that folder, in its order; `min_folders=N` keeps chats in ≥ N folders and names them | id, kind, title, @username, last message date, `deleted_peer` flag |
 | `list_folders()` | The user's chat folders in app order | id, title, kind, chat count, unread chats, rule/explicit summary |
 | `get_chat_info(chat)` | Details of one chat | type, title, folders, description, members count, peer identity, topics (forums) |
-| `get_messages(chat \| folder, period…, mode?, topic?, around?, comments_of?, cursor?, limit?)` | Read a chat chronologically for a period; `folder` merges all its chats (period required); `mode="headlines"` one line per post, reposts merged `×N`; `comments_of=<post id>` reads a channel post's comment thread (oldest first, author and comment links per line, no membership in the discussion group needed) | compact lines + `next_cursor` + `truncated` flag |
+| `get_messages(chat \| folder, period…, mode?, topic?, around?, cursor?, limit?)` | Read a chat chronologically for a period; `folder` merges all its chats (period required); `mode="headlines"` one line per post, reposts merged `×N`; channel posts with comments end in `💬N`, and the page names one ready `get_comments` call | compact lines + `next_cursor` + `truncated` flag |
+| `get_comments(chat, post?, period…, cursor?, limit?)` | A channel post's comment thread, oldest first, author and comment links per line, no membership in the discussion group needed; `post` may be left out when a cursor continues the thread | compact lines + `next_cursor` |
 | `search_messages(query, chat? \| folder?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat, in a folder's chats, or globally | compact lines with chat name + link |
 | `export_chat(chat, period…, format="md")` | Write a conversation to a Markdown file | file path, message count, date range |
 | `find_deleted_users()` | Dialogs whose peer account is deleted | chat id, last known identity, message count, first/last date |
@@ -174,7 +175,8 @@ backed by a local Ollama model. Not in stage 1.
 **Errors** are returned as short human-readable tool results, never stack traces:
 chat not found (with closest matches), ambiguous chat (candidates), FloodWait
 (waits automatically if ≤ 30 s, otherwise reports the wait time), not logged in
-(points to the login script).
+(points to the login script), any other Telegram refusal (its code plus a plain reason, e.g.
+`CHANNEL_PRIVATE`: "the channel … is private, or this account was removed or banned there").
 
 ## 8. Security & privacy
 

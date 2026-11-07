@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -215,15 +215,16 @@ def render_page(
     end_text: str,
     empty_text: str,
     line_of: Callable[[Message, str, int | None], str] | None = None,
+    noun: str = "message",
 ) -> str:
     """Head + day-grouped lines + footer, always <= max_chars. `messages` are chronological.
-    `line_of(message, stamp, text_limit)` replaces the plain chat line (comment threads)."""
+    `line_of(message, stamp, text_limit)` replaces the plain chat line and `noun` the counted word (comment threads)."""
     if not messages:
         return _clamp(f"{head}\n{empty_text}", max_chars)
     total = len(messages)
     for count in range(total, 0, -1):
         shown = messages[:count] if keep == "oldest" else messages[total - count :]
-        text = _page_text(head, shown, tz, more or count < total, keep, next_hint, end_text, None, line_of)
+        text = _page_text(head, shown, tz, more or count < total, keep, next_hint, end_text, None, line_of, noun)
         if len(text) <= max_chars:
             return text
     # Not even one fits: cut that message's text. Newest/oldest as the mode dictates.
@@ -231,7 +232,7 @@ def render_page(
     budget = max_chars - len(head) - FOOTER_RESERVE
     text_limit = max(budget, 0)
     while True:
-        text = _page_text(head, [only], tz, True, keep, next_hint, end_text, text_limit, line_of)
+        text = _page_text(head, [only], tz, True, keep, next_hint, end_text, text_limit, line_of, noun)
         if len(text) <= max_chars or text_limit == 0:
             return _clamp(text, max_chars)
         text_limit = max(0, text_limit - max(1, len(text) - max_chars))
@@ -251,6 +252,7 @@ def _page_text(
     end_text: str,
     text_limit: int | None = None,
     line_of: Callable[[Message, str, int | None], str] | None = None,
+    noun: str = "message",
 ) -> str:
     lines = [head]
     seen_people: set[int] = set()
@@ -263,9 +265,10 @@ def _page_text(
         stamp = f"{local:%H:%M}"
         lines.append(line_of(msg, stamp, text_limit) if line_of else _message_line(msg, stamp, seen_people, text_limit))
     first, last = shown[0].date, shown[-1].date
-    noun = "message" if len(shown) == 1 else "messages"
+    counted = noun if len(shown) == 1 else f"{noun}s"
+    lines += comments_hint(shown)
     tail = next_hint(shown[-1] if keep == "oldest" else shown[0]) if unfinished else end_text
-    lines.append(f"Shown {len(shown)} {noun} ({_when(first, tz)} → {_when(last, tz)}). {tail}")
+    lines.append(f"Shown {len(shown)} {counted} ({_when(first, tz)} → {_when(last, tz)}). {tail}")
     return "\n".join(lines)
 
 
@@ -276,6 +279,13 @@ def _text(text: str, limit: int | None, cap: int = MAX_TEXT_CHARS) -> str:
     if limit is not None and len(text) > limit:
         text = text[: max(limit - 1, 0)] + "…"
     return text
+
+
+def comments_hint(shown: Iterable[Message]) -> list[str]:
+    """One ready-made get_comments call per page, for the first post with comments: a ~26B model never found the
+    comment tool from its docstring alone, but copies calls it sees in a result. Empty when no post has comments."""
+    first = next((m for m in shown if m.comment_count), None)
+    return [] if first is None else [f'Comments: call get_comments(chat="{first.chat_id}", post={first.id})']
 
 
 def _message_line(
@@ -301,6 +311,8 @@ def _message_line(
         parts.append(f"↩#{msg.reply_to_id}")
     if msg.edit_date is not None:
         parts.append("✎")
+    if msg.comment_count:
+        parts.append(f"💬{msg.comment_count}")
     who = _sender(msg, seen_people)
     if label is not None and not _is_chat_itself(msg, who, label):
         who = f"{label} › {who}"
@@ -357,7 +369,8 @@ def _comment_author(msg: Message) -> str:
         return "Me"
     person = msg.sender
     if person is None:
-        return one_line(msg.sender_title) if msg.sender_title else "?"
+        title = one_line(msg.sender_title) if msg.sender_title else "?"
+        return f"{title} (https://t.me/{msg.sender_username})" if msg.sender_username else title
     name = one_line(person.display_name)
     if person.username and not person.is_deleted:
         return f"{name} (https://t.me/{person.username})"
@@ -519,6 +532,7 @@ def _hits_text(
         for msg in group:
             stamp = msg.date.astimezone(tz).strftime("%Y-%m-%d %H:%M")
             lines.append(_message_line(msg, stamp, seen_people, text_limit, text_of))
+    lines += comments_hint(shown)
     noun = "hit" if len(shown) == 1 else "hits"
     span = f"{_when(shown[0].date, tz)} → {_when(shown[-1].date, tz)}"
     if unfinished:
@@ -604,6 +618,7 @@ def _around_text(
             lines.append(f"— {day.isoformat()} {WEEKDAYS[day.weekday()]} —")
         mark = "▶" if msg.id == target_id else ""
         lines.append(_message_line(msg, f"{local:%H:%M}", seen_people, text_limit, mark=mark))
+    lines += comments_hint(shown)
     noun = "message" if len(shown) == 1 else "messages"
     lines.append(
         f"Shown {len(shown)} {noun} around #{target_id} ({_when(shown[0].date, tz)} → {_when(shown[-1].date, tz)})."

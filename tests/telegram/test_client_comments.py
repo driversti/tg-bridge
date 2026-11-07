@@ -2,13 +2,13 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from telethon.errors import ChannelPrivateError, ChatAdminRequiredError, FloodWaitError, MsgIdInvalidError
+from telethon.errors import ChannelInvalidError, ChannelPrivateError, ChatAdminRequiredError, FloodWaitError, MsgIdInvalidError, RPCError
 from telethon.tl import types as tl
 
 from tests.fakes import make_chat
 from tests.telegram.test_client import ALLOWED_REQUESTS, settings, wrapper  # noqa: F401  (fixtures)
 from tests.telegram.test_mapping import tl_msg, tl_user
-from tg_bridge.errors import CommentsUnavailableError, RateLimitedError
+from tg_bridge.errors import RateLimitedError, TelegramRefusedError
 from tg_bridge.source import MessageQuery, Post
 from tg_bridge.source.models import Message
 
@@ -90,12 +90,34 @@ async def test_get_comments_period_and_limit(wrapper):
     assert [m.id for m in result] == [2, 3, 4]  # skips before start, stops at end
 
 
-@pytest.mark.parametrize("error", [MsgIdInvalidError(request=None), ChannelPrivateError(request=None), ChatAdminRequiredError(request=None)])
-async def test_refused_replies_become_comments_unavailable(wrapper, error):
+@pytest.mark.parametrize(
+    "error, code",
+    [
+        (MsgIdInvalidError(request=None), "MSG_ID_INVALID"),
+        (ChannelPrivateError(request=None), "CHANNEL_PRIVATE"),
+        (ChatAdminRequiredError(request=None), "CHAT_ADMIN_REQUIRED"),
+        (ChannelInvalidError(request=None), "CHANNEL_INVALID"),
+        (RPCError(request=None, message="SOMETHING_NEW", code=400), "SOMETHING_NEW"),
+    ],
+)
+async def test_refused_replies_name_the_reason(wrapper, error, code):
     wrapper[1].iter_messages_fail_after = (0, error)
 
-    with pytest.raises(CommentsUnavailableError):
+    with pytest.raises(TelegramRefusedError) as exc:
         await comments(wrapper, [raw(1)], q())
+
+    assert exc.value.code == code
+
+
+async def test_refused_post_lookup_names_the_reason(wrapper):
+    tg, fake = wrapper
+    fake.get_messages_error = ChannelPrivateError(request=None)
+    await tg.connect()
+
+    with pytest.raises(TelegramRefusedError) as exc:
+        await tg.get_post(CHANNEL, 3186)
+
+    assert exc.value.code == "CHANNEL_PRIVATE"
 
 
 async def test_flood_becomes_rate_limited(wrapper):
@@ -121,3 +143,16 @@ async def test_log_has_counts_and_ids_only(wrapper, caplog):
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "2 comments of post 3186" in logged and "-1000000000010" in logged
     assert not any(w in logged for w in ("secret", "another", "Anna", "anna_k", "imatrofAI"))
+
+
+async def test_any_read_refusal_names_the_reason(wrapper):
+    # Not only comments: every Telegram refusal reaches the model as a reason, not as a crash.
+    tg, fake = wrapper
+    fake.iter_messages_fail_after = (0, ChannelPrivateError(request=None))
+    fake.messages = [raw(1)]
+    await tg.connect()
+
+    with pytest.raises(TelegramRefusedError) as exc:
+        await tg.get_messages(CHANNEL, q(direction="backward"))
+
+    assert "private" in str(exc.value) and "(CHANNEL_PRIVATE)" in str(exc.value)

@@ -11,6 +11,7 @@ from tg_bridge.format import (
     _clamp,
     _message_line,
     chat_link_base,
+    comments_hint,
     one_line,
 )
 from tg_bridge.headlines import Repost, headline
@@ -105,6 +106,7 @@ def _page_text(
         else:
             label = labels.get(item.chat_id, str(item.chat_id)) if labels is not None else None
             lines.append(_message_line(item, f"{local:%H:%M}", seen_people, text_limit, label=label))
+    lines += comments_hint(m for item in shown for m in _posts(item))
     last = shown[-1]
     lines.append(f"More remain. Next: {next_hint(_boundary(last))}" if unfinished else "End of period.")
     return "\n".join(lines)
@@ -129,7 +131,8 @@ def _headline_line(
         # A full link per post: the model did not fill the legend's `Links: …/<id>` in itself (smoke 08).
         chat = chats.get(msg.chat_id)
         base = chat_link_base(chat) if chat is not None else None
-        return f"{base}/{msg.id}" if base else f"#{msg.id}"
+        link = f"{base}/{msg.id}" if base else f"#{msg.id}"
+        return f"{link} 💬{msg.comment_count}" if msg.comment_count else link
 
     refs = " ".join(ref(m) for m in group.posts)
     if labels is None:
