@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 from zoneinfo import ZoneInfo
 
 from tg_bridge.cursor import ExportCursor, decode_export_cursor, encode_export_cursor
@@ -72,7 +72,9 @@ def export_filename(chat: Chat, period: Period, first: datetime, tz: ZoneInfo, n
     return f"{slug}_{chat.id}_{start.isoformat()}_{stop.isoformat()}_{now.astimezone(tz):%Y%m%d-%H%M%S}{suffix}.md"
 
 
-def render_header(info: ChatInfo, period: Period, tz: ZoneInfo, now: datetime) -> str:
+def render_header(
+    info: ChatInfo, period: Period, tz: ZoneInfo, now: datetime, identity: Sequence[str] = ()
+) -> str:
     chat = info.chat
     flags = [chat.kind, f"id {chat.id}"]
     if chat.username:
@@ -84,6 +86,7 @@ def render_header(info: ChatInfo, period: Period, tz: ZoneInfo, now: datetime) -
     lines = [f"# {one_line(chat.title)}", "", f"- Chat: {SEP.join(flags)}"]
     if chat.peer is not None:
         lines.append(f"- Peer: {_peer_text(chat.peer)}")
+        lines.extend(f"- Identity guess: {one_line(g)}" for g in identity)
     elif info.members_count is not None:
         lines.append(f"- Members: {info.members_count}")
     if info.description:
@@ -232,30 +235,58 @@ def _create_file(
     raise FileExistsError(f"no free export file name after {MAX_NAME_SUFFIX} tries")
 
 
-def _reopen_latest(dest_dir: Path, chat: Chat) -> tuple[Path, ExportCursor, TextIO]:
-    """The chat's newest export file, its resume state, and the file opened for appending with the footer cut off."""
-    nothing = ExportFileError("No unfinished export of this chat to resume. Call export_chat without resume to start one.")
+ExportState = Literal["complete", "unfinished"]
+
+
+def _newest_file(dest_dir: Path, chat: Chat) -> Path | None:
     # The slug has no underscores, so `_<id>_` only matches this chat's files.
     files = list(dest_dir.glob(f"*_{chat.id}_*.md")) if dest_dir.is_dir() else []
-    if not files:
-        raise nothing
-    path = max(files, key=lambda p: p.stat().st_mtime)
-    with open(path, "r+b") as f:
+    return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+
+def _read_footer(path: Path, chat: Chat) -> tuple[ExportCursor | None, bool, int]:
+    """What the file's tail says: its resume state (None without a valid note), whether it ends complete, and the
+    byte size the file has without the footer (where appending continues)."""
+    with open(path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
         f.seek(max(0, size - _FOOTER_TAIL))
         tail = f.read()
-        # Chat text never yields a bare "---" line (escape_block), so this is the footer.
-        cut = tail.rfind(b"\n---\n")
-        note = _RESUME_NOTE.search(tail, cut) if cut >= 0 else None
-        if note is None:
-            if tail.rstrip().endswith(b" complete"):
-                raise ExportFileError(f"The latest export of this chat is already complete: {path}")
-            raise nothing
+    # Chat text never yields a bare "---" line (escape_block), so this is the footer.
+    cut = tail.rfind(b"\n---\n")
+    note = _RESUME_NOTE.search(tail, cut) if cut >= 0 else None
+    state = None
+    if note is not None:
         try:
             state = decode_export_cursor(note.group(1).decode("ascii"), chat.id)
         except CursorError:
-            raise nothing from None
-        f.truncate(size - len(tail) + cut + 1)
+            state = None
+    complete = note is None and tail.rstrip().endswith(b" complete")
+    return state, complete, size - len(tail) + cut + 1
+
+
+def latest_export(dest_dir: Path, chat: Chat) -> tuple[Path, ExportState] | None:
+    """The chat's newest export file and whether it is finished; None when there is none or it can't be continued."""
+    path = _newest_file(dest_dir, chat)
+    if path is None:
+        return None
+    state, complete, _ = _read_footer(path, chat)
+    if complete:
+        return path, "complete"
+    return (path, "unfinished") if state is not None else None
+
+
+def _reopen_latest(dest_dir: Path, chat: Chat) -> tuple[Path, ExportCursor, TextIO]:
+    """The chat's newest export file, its resume state, and the file opened for appending with the footer cut off."""
+    nothing = ExportFileError("No unfinished export of this chat to resume. Call export_chat without resume to start one.")
+    path = _newest_file(dest_dir, chat)
+    if path is None:
+        raise nothing
+    state, complete, keep = _read_footer(path, chat)
+    if state is None:
+        if complete:
+            raise ExportFileError(f"The latest export of this chat is already complete: {path}")
+        raise nothing
+    os.truncate(path, keep)
     out = os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND), "w", encoding="utf-8", newline="\n")
     return path, state, out
 
@@ -269,12 +300,14 @@ async def export_chat_file(
     now: datetime,
     *,
     resume: bool = False,
+    budget: float = EXPORT_TIME_BUDGET,
+    identity: Sequence[str] = (),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> ExportResult:
     """Pages through the chat oldest first and appends each page to a new Markdown file in `dest_dir`, or, with
     `resume`, to the chat's latest unfinished file (its period wins over `period`). After EXPORT_TIME_BUDGET seconds
-    it pauses; the file then ends with a hidden note that `resume` continues from.
+    it (or `budget` seconds) pauses; the file then ends with a hidden note that `resume` continues from.
     A rate limit or other bridge error mid-way ends the file with an INCOMPLETE footer and is reported in the result;
     anything else also leaves that footer but propagates."""
     chat = info.chat
@@ -324,7 +357,7 @@ async def export_chat_file(
                 break
             if out is None:  # the file only exists once there is something to put in it
                 path, file_n, out = _create_file(dest_dir, chat, period, page[0].date, tz, now)
-                out.write(render_header(info, period, tz, now))
+                out.write(render_header(info, period, tz, now, identity))
             out.write(render_messages(page, chat, tz, state))
             out.flush()
             count += len(page)
@@ -333,7 +366,7 @@ async def export_chat_file(
             boundary = page[-1].id
             if len(page) < EXPORT_PAGE:
                 break
-            if clock() - budget_start >= EXPORT_TIME_BUDGET:
+            if clock() - budget_start >= budget:
                 paused = True
                 break
         if out is not None:
