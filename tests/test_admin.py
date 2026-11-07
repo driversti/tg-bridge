@@ -16,6 +16,7 @@ from tg_bridge.admin import AdminApp, Snapshot, make_server
 from tg_bridge.config import load_settings
 from tg_bridge.errors import SessionBusyError
 from tg_bridge.source.allowlist import Allowlist
+from tg_bridge.token_file import BadTokenFile, admin_token_file
 
 LOGIN, COOKIE, CSRF = "login-token", "session-cookie", "csrf-token"
 
@@ -718,30 +719,30 @@ def test_person_without_username_gets_a_tg_link_row(tmp_path):
 
 def test_token_file_is_created_600_and_reused(tmp_path):
     session = tmp_path / "sess" / "tg.session"
-    first = admin.load_or_create_token(session)
+    first = admin_token_file(session).load_or_create()
     path = tmp_path / "sess" / "tg.admin-token"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-    assert admin.load_or_create_token(session) == first and len(first) >= 32
+    assert admin_token_file(session).load_or_create() == first and len(first) >= 32
 
 
 @pytest.mark.parametrize("content", ["", "  \n", "short"])
 def test_malformed_token_file_refuses(tmp_path, content):
     session = tmp_path / "tg.session"
     (tmp_path / "tg.admin-token").write_text(content)
-    with pytest.raises(admin.BadTokenFile, match="--new-link"):
-        admin.load_or_create_token(session)
+    with pytest.raises(BadTokenFile, match="malformed"):
+        admin_token_file(session).load_or_create()
     assert (tmp_path / "tg.admin-token").read_text() == content
 
 
 def test_cookie_and_csrf_are_stable_per_token_and_differ_between_tokens(tmp_path):
     session = tmp_path / "tg.session"
-    token = admin.load_or_create_token(session)
+    token = admin_token_file(session).load_or_create()
     c1, s1 = admin.derive_secrets(token)
-    c2, s2 = admin.derive_secrets(admin.load_or_create_token(session))
+    c2, s2 = admin.derive_secrets(admin_token_file(session).load_or_create())
     assert (c1, s1) == (c2, s2) and c1 != s1 and token not in (c1, s1)
 
-    new = admin.write_new_token(session)
+    new = admin_token_file(session).rotate()
     assert new != token and stat.S_IMODE((tmp_path / "tg.admin-token").stat().st_mode) == 0o600
     c3, s3 = admin.derive_secrets(new)
     assert c3 != c1 and s3 != s1
@@ -767,7 +768,7 @@ def test_link_flag_prints_without_telegram_or_server(monkeypatch, tmp_path, caps
     monkeypatch.setattr(admin, "make_server", _boom)
     admin.main(["--link"])
     err = capsys.readouterr().err
-    token = admin.load_or_create_token(tmp_path / "tg.session")
+    token = admin_token_file(tmp_path / "tg.session").load_or_create()
     assert f"/login?token={token}" in err
 
 
@@ -775,9 +776,9 @@ def test_new_link_flag_replaces_the_token_and_exits(monkeypatch, tmp_path, capsy
     _cli_env(monkeypatch, tmp_path)
     monkeypatch.setattr(admin, "fetch_snapshot", _boom)
     monkeypatch.setattr(admin, "make_server", _boom)
-    old = admin.load_or_create_token(tmp_path / "tg.session")
+    old = admin_token_file(tmp_path / "tg.session").load_or_create()
     admin.main(["--new-link"])
-    new = admin.load_or_create_token(tmp_path / "tg.session")
+    new = admin_token_file(tmp_path / "tg.session").load_or_create()
     assert new != old and f"token={new}" in capsys.readouterr().err
 
 

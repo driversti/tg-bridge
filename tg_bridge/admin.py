@@ -43,13 +43,13 @@ from tg_bridge.source.dialog_cache import DialogCache
 from tg_bridge.source.live import LiveSource
 from tg_bridge.source.models import Chat, Folder
 from tg_bridge.telegram.client import ReadOnlyTelegram
+from tg_bridge.token_file import BadTokenFile, admin_token_file
 
 log = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
 COOKIE_NAME = "tgb_admin"
 COOKIE_MAX_AGE = 365 * 24 * 3600
-MIN_TOKEN_LEN = 32
 MAX_BODY = 16 * 1024
 BUSY_TEXT = "Telegram session is busy (LM Studio is using it); try Refresh in a moment."
 REFRESH_COOLDOWN = 10.0  # seconds; a double click must not fetch twice
@@ -64,46 +64,6 @@ _USERNAME = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 def photo_dir_for(session_path: Path) -> Path:
     return session_path.with_name(f"{session_path.stem}.photos")
-
-
-class BadTokenFile(Exception):
-    """The login token file exists but is empty or malformed; never replaced silently."""
-
-
-def token_path_for(session_path: Path) -> Path:
-    return session_path.with_name(f"{session_path.stem}.admin-token")
-
-
-def _write_token(path: Path, token: str) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # mkstemp creates the file 600; replace() makes the swap atomic.
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w", encoding="ascii") as f:
-            f.write(token + "\n")
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
-def write_new_token(session_path: Path) -> str:
-    token = secrets.token_urlsafe(32)
-    _write_token(token_path_for(session_path), token)
-    return token
-
-
-def load_or_create_token(session_path: Path) -> str:
-    path = token_path_for(session_path)
-    try:
-        token = path.read_text(encoding="ascii").strip()
-    except FileNotFoundError:
-        return write_new_token(session_path)
-    except (OSError, ValueError) as e:
-        raise BadTokenFile(f"cannot read the login token file ({type(e).__name__}); run with --new-link") from None
-    if len(token) < MIN_TOKEN_LEN or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
-        raise BadTokenFile("the login token file is malformed; run with --new-link to replace it")
-    return token
 
 
 def derive_secrets(token: str) -> tuple[str, str]:
@@ -655,9 +615,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(2)
 
     try:
-        token = write_new_token(settings.session_path) if args.new_link else load_or_create_token(settings.session_path)
+        tokens = admin_token_file(settings.session_path)
+        token = tokens.rotate() if args.new_link else tokens.load_or_create()
     except BadTokenFile as e:
-        print(f"tg-bridge-admin: {e}", file=sys.stderr)
+        print(f"tg-bridge-admin: {e}; run with --new-link to replace it", file=sys.stderr)
         sys.exit(2)
     # Outside `logging` on purpose: the token must never reach a log.
     if args.link or args.new_link:
