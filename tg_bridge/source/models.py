@@ -159,6 +159,25 @@ class MessageQuery:
 
 
 @dataclass(frozen=True)
+class HistoryStats:
+    """Size of a 1:1 history: Telegram's own total and the oldest message's date."""
+
+    count: int
+    first_at: datetime | None  # aware UTC; None when the history is empty
+
+
+@dataclass(frozen=True)
+class ContactCard:
+    """A shared contact (MessageMediaContact): the name as written on the card, not the account's current one."""
+
+    message_id: int
+    date: datetime  # aware UTC
+    user_id: int | None
+    first_name: str | None
+    last_name: str | None
+
+
+@dataclass(frozen=True)
 class SearchOffset:
     """"Continue with hits older than this one."""
 

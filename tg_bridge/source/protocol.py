@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from typing import Protocol
 
-from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, Post, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, ContactCard, Folder, HistoryStats, MediaFile, Message, MessageQuery, Person, Post, SearchQuery
 
 
 class MessageSource(Protocol):
@@ -29,6 +29,14 @@ class MessageSource(Protocol):
 
     async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
         """At most `query.limit` messages of one resolved chat, in the query's direction (forward = ascending ids)."""
+        ...
+
+    async def get_history_stats(self, chat: Chat) -> HistoryStats:
+        """Message count and first message date of one resolved chat."""
+        ...
+
+    async def get_contact_cards(self, chat: Chat, limit: int = 20) -> list[ContactCard]:
+        """Shared-contact messages of one resolved chat, newest first, at most `limit`."""
         ...
 
     async def get_post(self, chat: Chat, post_id: int) -> Post | None:

@@ -11,7 +11,7 @@ from dataclasses import replace
 from tg_bridge.errors import ChatNotFoundError
 from tg_bridge.scope import chat_visible
 from tg_bridge.source.allowlist import Allowlist
-from tg_bridge.source.models import Chat, ChatInfo, Folder, MediaFile, Message, MessageQuery, Person, Post, SearchOffset, SearchQuery
+from tg_bridge.source.models import Chat, ChatInfo, ContactCard, Folder, HistoryStats, MediaFile, Message, MessageQuery, Person, Post, SearchOffset, SearchQuery
 from tg_bridge.source.protocol import MessageSource
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,14 @@ class ScopedSource:
     async def get_messages(self, chat: Chat, query: MessageQuery) -> list[Message]:
         await self._require_visible(chat)
         return await self._inner.get_messages(chat, query)
+
+    async def get_history_stats(self, chat: Chat) -> HistoryStats:
+        await self._require_visible(chat)
+        return await self._inner.get_history_stats(chat)
+
+    async def get_contact_cards(self, chat: Chat, limit: int = 20) -> list[ContactCard]:
+        await self._require_visible(chat)
+        return await self._inner.get_contact_cards(chat, limit)
 
     async def get_post(self, chat: Chat, post_id: int) -> Post | None:
         await self._require_visible(chat)

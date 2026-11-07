@@ -753,3 +753,23 @@ def test_photo_id_from_real_photos_only():
     assert chat_from_dialog(dialog(usr)).photo_id == 777
     assert chat_from_dialog(dialog(tl_channel(broadcast=True))).photo_id is None  # ChatPhotoEmpty
     assert chat_from_dialog(dialog(tl_user(photo=tl.UserProfilePhotoEmpty()))).photo_id is None
+
+
+# --- contact cards ---------------------------------------------------------------
+from tg_bridge.source import ContactCard  # noqa: E402
+from tg_bridge.telegram.mapping import contact_card_from_tl  # noqa: E402
+
+
+def tl_card(user_id=777, first="Olena", last="P"):
+    return tl.MessageMediaContact(phone_number="+48123", first_name=first, last_name=last, vcard="", user_id=user_id)
+
+
+def test_contact_card_from_tl_reads_card_fields():
+    card = contact_card_from_tl(tl_msg(id=5, text="", media=tl_card()))
+
+    assert card == ContactCard(message_id=5, date=datetime(2026, 10, 25, 12, 3, tzinfo=UTC), user_id=777, first_name="Olena", last_name="P")
+
+
+def test_contact_card_from_tl_none_for_other_media_and_zero_user_id():
+    assert contact_card_from_tl(tl_msg(id=5, text="plain")) is None
+    assert contact_card_from_tl(tl_msg(id=6, text="", media=tl_card(user_id=0))) is None

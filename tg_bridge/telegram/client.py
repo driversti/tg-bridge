@@ -30,7 +30,9 @@ from tg_bridge.source import (
     MEDIA_CHUNK,
     Chat,
     ChatInfo,
+    ContactCard,
     Folder,
+    HistoryStats,
     MediaFile,
     Message,
     MessageQuery,
@@ -44,6 +46,7 @@ from tg_bridge.telegram.identity import client_identity
 from tg_bridge.telegram.mapping import (
     chat_from_dialog,
     comment_from_tl,
+    contact_card_from_tl,
     folder_from_tl,
     largest_photo_size,
     media_file_from_tl,
@@ -51,6 +54,7 @@ from tg_bridge.telegram.mapping import (
     person_from_user,
     post_from_tl,
     topic_from_forum_topic,
+    utc,
 )
 
 log = logging.getLogger(__name__)
@@ -241,6 +245,33 @@ class ReadOnlyTelegram:
             "read %d messages from %d (%s) in %.2f s", len(messages), chat.id, query.direction, time.monotonic() - started
         )
         return messages
+
+    async def get_history_stats(self, chat: Chat) -> HistoryStats:
+        """Server-side message count (TotalList.total) and the oldest message's date, from one history call."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+        page = await self._call(lambda: client.get_messages(entity, limit=1, reverse=True, wait_time=0))
+        oldest = next((m for m in page if _is_message(m)), None)
+        count = int(getattr(page, "total", len(page)))
+        log.info("history stats chat=%s count=%d", chat.id, count)
+        return HistoryStats(count, None if oldest is None else utc(oldest.date))
+
+    async def get_contact_cards(self, chat: Chat, limit: int = 20) -> list[ContactCard]:
+        """Shared-contact messages, newest first (server-side contacts filter inside one chat)."""
+        client = self._connected()
+        entity = await self._input_entity(client, chat.id)
+
+        async def collect() -> list[ContactCard]:
+            found: list[ContactCard] = []
+            async for raw in client.iter_messages(entity, limit=limit, filter=tl.InputMessagesFilterContacts()):
+                card = contact_card_from_tl(raw)
+                if card is not None:
+                    found.append(card)
+            return found
+
+        cards = await self._call(collect)
+        log.info("contact cards chat=%s count=%d", chat.id, len(cards))
+        return cards
 
     async def get_post(self, chat: Chat, post_id: int) -> Post | None:
         """One channel post with its comment-thread info; None for an unknown id or a service message."""
