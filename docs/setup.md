@@ -97,8 +97,8 @@ Open the `http://127.0.0.1:<port>/login?token=...` link it prints (the link sets
 request is refused). The page has tabs: Groups, Channels, People and Mine (what you created, plus Saved Messages). Each row shows
 icon, title, kind and a link (`t.me/c/...`, or `t.me/<username>` for people and bots); new chats start off, and a switch
 applies on the next tool call. Switching on a person, a bot or Saved Messages asks for confirmation. Small chat icons
-are cached in `<session stem>.photos/` next to the session (dir `700`), so a second Refresh only fetches changed ones. It reads Telegram only at start and on
-Refresh, so it does not keep the session locked while LM Studio works. If the session is busy, press Refresh
+are cached in `<session stem>.photos/` next to the session (dir `700`), so a second Refresh only fetches changed ones. The page opens at once; icons arrive in the background (25 per short session, with a pause between batches; `Icons: n/m` shows progress, reload to see more). It reads Telegram only at start, on
+Refresh and in those short batches, so it does not keep the session locked while LM Studio works. If the session is busy, press Refresh
 again in a moment.
 
 From the phone: run `tailscale serve --bg <port>` on the Mac, then open the same login path on the Mac's tailnet name.

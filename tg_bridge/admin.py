@@ -19,8 +19,10 @@ import re
 import secrets
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from http import cookies
@@ -47,6 +49,9 @@ COOKIE_NAME = "tgb_admin"
 MAX_BODY = 16 * 1024
 BUSY_TEXT = "Telegram session is busy (LM Studio is using it); try Refresh in a moment."
 REFRESH_COOLDOWN = 10.0  # seconds; a double click must not fetch twice
+PHOTO_BATCH = 25
+PHOTO_PAUSE = 2.0  # seconds between batches: the session is free for LM Studio meanwhile
+PHOTO_BUSY_WAIT = 5.0
 TABS = ("groups", "channels", "people", "mine")
 DEFAULT_TAB = "groups"
 TAB_LABELS = {"groups": "Groups", "channels": "Channels", "people": "People", "mine": "Mine"}
@@ -103,29 +108,123 @@ def _store_photo(photo_dir: Path, chat: Chat, data: bytes) -> None:
             old.unlink(missing_ok=True)
 
 
-async def fetch_snapshot(settings: Settings, photo_dir: Path) -> Snapshot:
-    """Dialogs and folders; small photos of listed chats are downloaded only when missing on disk. The Telegram
-    connection is closed afterwards."""
+async def fetch_snapshot(settings: Settings) -> Snapshot:
+    """Dialogs and folders only (photos come later, from the PhotoWorker). The Telegram connection is closed
+    afterwards."""
     telegram = ReadOnlyTelegram(settings)
     cache = DialogCache(settings.session_path.with_name(f"{settings.session_path.stem}.dialogs.json"))
     live = LiveSource(telegram, dialog_cache=cache)
-    downloaded = 0
     try:
         chats = await live.list_dialogs(refresh=True)
         folders = await live.list_folders()
-        for chat in chats:
-            if not listed_on_page(chat) or chat.photo_id is None or _photo_file(photo_dir, chat).exists():
-                continue
-            data = await telegram.download_chat_photo(chat.id)
-            if data:
-                _store_photo(photo_dir, chat, data)
-                downloaded += 1
-                if downloaded % 100 == 0:
-                    log.info("admin photos: %d downloaded so far", downloaded)
     finally:
         await live.close()
-    log.info("admin snapshot: %d dialogs, %d folders, %d photos downloaded", len(chats), len(folders), downloaded)
+    log.info("admin snapshot: %d dialogs, %d folders", len(chats), len(folders))
     return Snapshot(chats, folders, datetime.now().astimezone())
+
+
+async def download_photos(settings: Settings, photo_dir: Path, chats: list[Chat]) -> None:
+    """One short session for one batch. A busy session propagates (the worker retries); any other failure skips
+    just that chat."""
+    telegram = ReadOnlyTelegram(settings)
+    await telegram.connect()
+    try:
+        for chat in chats:
+            try:
+                data = await telegram.download_chat_photo(chat.id)
+                if data:
+                    _store_photo(photo_dir, chat, data)
+            except SessionBusyError:
+                raise
+            except Exception as e:  # noqa: BLE001 - a missing icon is not worth stopping for
+                log.warning("admin photo skipped: %s", type(e).__name__)
+    finally:
+        await telegram.disconnect()
+
+
+class PhotoWorker:
+    """Downloads missing icons of listed chats in the background, a batch per short Telegram session.
+
+    `lock` is shared with AdminApp: it guards every Telegram use of this process, so a Refresh and a batch never
+    overlap. The lock is released before each pause, so the session is never held while idle. `download` is
+    synchronous (tests inject a fake; main() wraps `download_photos` in asyncio.run).
+    """
+
+    def __init__(
+        self,
+        download: Callable[[list[Chat]], None],
+        photo_dir: Path,
+        lock: AbstractContextManager,
+        sleep: Callable[[float], None] = time.sleep,
+        batch_size: int = PHOTO_BATCH,
+        pause: float = PHOTO_PAUSE,
+        busy_wait: float = PHOTO_BUSY_WAIT,
+    ):
+        self._download = download
+        self._photo_dir = photo_dir
+        self._lock = lock
+        self._sleep = sleep
+        self._batch_size = batch_size
+        self._pause = pause
+        self._busy_wait = busy_wait
+        self._state = threading.Lock()  # guards the fields below; never held across Telegram or sleep
+        self._chats: list[Chat] = []
+        self._pending: list[Chat] = []
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def set_chats(self, chats: list[Chat], autostart: bool = True) -> None:
+        """(Re)start the queue from a snapshot's chats; `autostart=False` is for tests that drive `run_once`."""
+        wanted = [c for c in chats if listed_on_page(c) and c.photo_id is not None]
+        missing = [c for c in wanted if not _photo_file(self._photo_dir, c).exists()]
+        with self._state:
+            self._chats = wanted
+            self._pending = missing
+            self._running = bool(missing)
+            if self._running and autostart and (self._thread is None or not self._thread.is_alive()):
+                self._thread = threading.Thread(target=self.run_until_done, name="photo-worker", daemon=True)
+                self._thread.start()
+
+    def progress(self) -> tuple[int, int] | None:
+        """(loaded, total) while the queue is not empty; None when there is nothing left to load."""
+        with self._state:
+            if not self._running:
+                return None
+            chats = list(self._chats)
+        loaded = sum(_photo_file(self._photo_dir, c).exists() for c in chats)
+        return loaded, len(chats)
+
+    def run_once(self) -> float | None:
+        """One batch. Returns the seconds to wait before the next one, or None when the queue is done."""
+        with self._state:
+            batch = self._pending[: self._batch_size]
+            if not batch:
+                self._running = False
+                return None
+        delay = self._pause
+        try:
+            with self._lock:
+                self._download(batch)
+        except SessionBusyError:
+            return self._busy_wait  # the batch stays queued
+        except Exception as e:  # noqa: BLE001 - class name only: the message may carry chat data
+            log.warning("admin photo batch skipped: %s", type(e).__name__)
+        done = {c.id for c in batch}
+        with self._state:
+            self._pending = [c for c in self._pending if c.id not in done]
+            if not self._pending:
+                self._running = False
+                return None
+        return delay
+
+    def run_until_done(self) -> None:
+        while (delay := self.run_once()) is not None:
+            self._sleep(delay)
+
+    def join(self, timeout: float | None = None) -> None:
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
 
 
 class AdminApp:
@@ -140,6 +239,8 @@ class AdminApp:
         csrf: str,
         photo_dir: Path | None = None,
         clock: Callable[[], float] = time.monotonic,
+        lock: AbstractContextManager | None = None,
+        photos: "PhotoWorker | None" = None,
     ):
         self._fetch = fetch
         self.allowlist = allowlist
@@ -151,6 +252,8 @@ class AdminApp:
         self.photo_dir = photo_dir
         self._clock = clock
         self._last_ok: float | None = None
+        self.lock = lock if lock is not None else threading.Lock()  # every Telegram use takes it
+        self.photos = photos
 
     def refresh_unless_recent(self) -> None:
         """The Refresh button: a second press right after a successful fetch is ignored."""
@@ -161,9 +264,13 @@ class AdminApp:
     def refresh(self) -> None:
         """Re-fetch; on failure the previous snapshot stays and `notice` says why."""
         try:
-            self.snapshot = self._fetch()
+            with self.lock:  # waits for a running photo batch
+                snapshot = self._fetch()
+            self.snapshot = snapshot
             self.notice = None
             self._last_ok = self._clock()
+            if self.photos is not None:
+                self.photos.set_chats(snapshot.chats)
         except SessionBusyError:
             self.notice = BUSY_TEXT
         except TgBridgeError as e:  # messages of anticipated errors carry no PII
@@ -221,9 +328,11 @@ class AdminApp:
             parts.append(f'<p class="notice">{html.escape(self.notice)}</p>')
         parts.append(_tabs_nav(tab, counts, filters))
         if snap is not None:
+            progress = self.photos.progress() if self.photos is not None else None
+            icons = f" · Icons: {progress[0]}/{progress[1]}" if progress else ""
             parts.append(
                 f'<p class="meta">{len(in_current)} chats here · {on_count} on · '
-                f"fetched {html.escape(snap.fetched_at.strftime('%Y-%m-%d %H:%M'))}</p>"
+                f"fetched {html.escape(snap.fetched_at.strftime('%Y-%m-%d %H:%M'))}{icons}</p>"
             )
         parts.append(self._toolbar(q, chosen, folders, keep))
         for chat in shown:
@@ -476,15 +585,19 @@ def main() -> None:
         sys.exit(2)
 
     photo_dir = photo_dir_for(settings.session_path)
+    lock = threading.Lock()
+    worker = PhotoWorker(lambda chats: asyncio.run(download_photos(settings, photo_dir, chats)), photo_dir, lock)
     app = AdminApp(
-        lambda: asyncio.run(fetch_snapshot(settings, photo_dir)),
+        lambda: asyncio.run(fetch_snapshot(settings)),
         Allowlist(allowlist_path(settings.session_path)),
         login_token=secrets.token_urlsafe(32),
         session_cookie=secrets.token_urlsafe(32),
         csrf=secrets.token_urlsafe(32),
         photo_dir=photo_dir,
+        lock=lock,
+        photos=worker,
     )
-    app.refresh()
+    app.refresh()  # also queues the missing icons; the worker starts at once
     if app.notice:
         print(f"tg-bridge-admin: {app.notice}", file=sys.stderr)
     try:

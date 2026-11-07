@@ -455,37 +455,16 @@ def fetch_settings(tmp_path):
     return load_settings(env={**CREDS, "TG_BRIDGE_SESSION": str(tmp_path / "s.session")}, config_file=tmp_path / "c")
 
 
-async def test_fetch_snapshot_downloads_photos_only_for_listed_chats_with_a_photo_then_disconnects(tmp_path, monkeypatch):
+async def test_fetch_snapshot_downloads_no_photos_and_disconnects(tmp_path, monkeypatch):
     monkeypatch.setattr(admin, "ReadOnlyTelegram", FakeTelegram)
-    photos = tmp_path / "photos"
 
-    snap = await admin.fetch_snapshot(fetch_settings(tmp_path), photos)
+    snap = await admin.fetch_snapshot(fetch_settings(tmp_path))
 
     tg = FakeTelegram.instances[-1]
-    # DM (listed, photo 8) and MINE_PRIV (photo 3); GROUP/EVIL have no photo_id, PUBLIC is not listed.
-    assert sorted(tg.photo_requests) == sorted([DM.id, MINE_PRIV.id])
-    assert (photos / f"{DM.id}_8.jpg").read_bytes() == b"img"
-    assert stat.S_IMODE(photos.stat().st_mode) == 0o700
-    assert stat.S_IMODE((photos / f"{DM.id}_8.jpg").stat().st_mode) == 0o600
+    assert tg.photo_requests == []
     assert [c.id for c in snap.chats] == [GROUP.id, EVIL.id, PUBLIC.id, DM.id, MINE_PRIV.id, MINE_PUB.id]
     assert snap.folders == [FOLDER]
     assert tg.disconnected
-
-
-async def test_second_fetch_downloads_nothing_until_the_photo_id_changes(tmp_path, monkeypatch):
-    monkeypatch.setattr(admin, "ReadOnlyTelegram", FakeTelegram)
-    photos = tmp_path / "photos"
-    settings = fetch_settings(tmp_path)
-    await admin.fetch_snapshot(settings, photos)
-
-    await admin.fetch_snapshot(settings, photos)
-    assert FakeTelegram.instances[-1].photo_requests == []
-
-    changed = replace(DM, photo_id=9)
-    monkeypatch.setattr(FakeTelegram, "list_dialogs", lambda self: _async([changed]))
-    await admin.fetch_snapshot(settings, photos)
-    assert FakeTelegram.instances[-1].photo_requests == [DM.id]
-    assert sorted(p.name for p in photos.iterdir() if p.name.startswith(f"{DM.id}_")) == [f"{DM.id}_9.jpg"]
 
 
 async def _async(value):
@@ -500,6 +479,203 @@ async def test_fetch_snapshot_disconnects_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(admin, "ReadOnlyTelegram", Failing)
 
     with pytest.raises(SessionBusyError):
-        await admin.fetch_snapshot(fetch_settings(tmp_path), tmp_path / "photos")
+        await admin.fetch_snapshot(fetch_settings(tmp_path))
 
     assert FakeTelegram.instances[-1].disconnected
+
+
+# --- the background photo worker -----------------------------------------------
+
+
+class FakeDownloader:
+    """Stands in for one Telegram session per batch: records batches and whether sessions overlap."""
+
+    def __init__(self, photo_dir, events=None, fail_first_with=None):
+        self.photo_dir = photo_dir
+        self.batches: list[list[int]] = []
+        self.events = events if events is not None else []
+        self.fail_first_with = fail_first_with
+        self.inside = 0
+        self.overlaps = 0
+        self.hook = None
+
+    def __call__(self, chats):
+        self.events.append("connect")
+        self.inside += 1
+        if self.inside > 1:
+            self.overlaps += 1
+        try:
+            if self.fail_first_with is not None:
+                err, self.fail_first_with = self.fail_first_with, None
+                raise err
+            if self.hook:
+                self.hook()
+            self.batches.append([c.id for c in chats])
+            for c in chats:
+                admin._store_photo(self.photo_dir, c, b"img")
+        finally:
+            self.inside -= 1
+            self.events.append("disconnect")
+
+
+def photo_chats(n, start=1):
+    return [
+        make_chat(id=-1001000100000 - i, kind="supergroup", title=f"Club {i}", username=None, is_creator=True, photo_id=i)
+        for i in range(start, start + n)
+    ]
+
+
+def make_worker(tmp_path, download, **kw):
+    sleeps = []
+    lock = kw.pop("lock", threading.Lock())
+    worker = admin.PhotoWorker(download, tmp_path / "photos", lock, sleep=sleeps.append, **kw)
+    return worker, sleeps
+
+
+def test_worker_downloads_in_batches_of_25_releasing_the_session_before_each_sleep(tmp_path):
+    events = []
+    dl = FakeDownloader(tmp_path / "photos", events)
+    worker, sleeps = make_worker(tmp_path, dl)
+    chats = photo_chats(60)
+    worker.set_chats(chats, autostart=False)
+
+    worker.run_until_done()
+
+    assert [len(b) for b in dl.batches] == [25, 25, 10]
+    assert [i for b in dl.batches for i in b] == [c.id for c in chats]  # snapshot order
+    assert sleeps == [2.0, 2.0]  # between batches, none after the last
+    assert events == ["connect", "disconnect"] * 3
+    assert worker.progress() is None
+
+
+def test_worker_skips_chats_whose_photo_is_already_on_disk_and_non_listed_ones(tmp_path):
+    dl = FakeDownloader(tmp_path / "photos")
+    worker, _ = make_worker(tmp_path, dl)
+    have, need = photo_chats(2)
+    admin._store_photo(tmp_path / "photos", have, b"x")
+    nophoto = replace(need, id=-1001000199999, photo_id=None)
+    worker.set_chats([have, need, nophoto, PUBLIC], autostart=False)
+
+    worker.run_until_done()
+
+    assert dl.batches == [[need.id]]
+
+
+def test_busy_batch_waits_five_seconds_and_is_retried(tmp_path):
+    dl = FakeDownloader(tmp_path / "photos", fail_first_with=SessionBusyError())
+    worker, sleeps = make_worker(tmp_path, dl)
+    chats = photo_chats(3)
+    worker.set_chats(chats, autostart=False)
+
+    worker.run_until_done()
+
+    assert sleeps == [5.0]
+    assert dl.batches == [[c.id for c in chats]]
+
+
+def test_other_batch_error_skips_the_batch_and_logs_the_class_only(tmp_path, caplog):
+    dl = FakeDownloader(tmp_path / "photos", fail_first_with=RuntimeError("Secret Title"))
+    worker, _ = make_worker(tmp_path, dl, batch_size=2)
+    chats = photo_chats(3)
+    worker.set_chats(chats, autostart=False)
+
+    worker.run_until_done()
+
+    assert dl.batches == [[chats[2].id]]  # first batch skipped, no endless retry
+    assert "RuntimeError" in caplog.text and "Secret Title" not in caplog.text
+
+
+def test_progress_counts_loaded_over_total_while_running(tmp_path):
+    dl = FakeDownloader(tmp_path / "photos")
+    worker, _ = make_worker(tmp_path, dl, batch_size=2)
+    chats = photo_chats(5)
+    worker.set_chats(chats[:1] + chats[1:], autostart=False)
+    assert worker.progress() == (0, 5)
+
+    worker.run_once()
+    assert worker.progress() == (2, 5)
+    worker.run_until_done()
+    assert worker.progress() is None
+
+
+def test_lock_keeps_refresh_and_a_batch_from_overlapping(tmp_path):
+    lock = threading.Lock()
+    dl = FakeDownloader(tmp_path / "photos")
+    worker, _ = make_worker(tmp_path, dl, lock=lock)
+    worker.set_chats(photo_chats(3), autostart=False)
+    in_batch, release = threading.Event(), threading.Event()
+    in_refresh = []
+
+    def hold():
+        in_batch.set()
+        assert release.wait(5)
+
+    dl.hook = hold
+
+    def fetch():
+        in_refresh.append(dl.inside)  # no session may be open while the refresh fetches
+        return snapshot()
+
+    app = AdminApp(fetch, Allowlist(tmp_path / "a.json"), LOGIN, COOKIE, CSRF, lock=lock, photos=worker)
+    t_worker = threading.Thread(target=worker.run_once)
+    t_worker.start()
+    assert in_batch.wait(5)
+    t_refresh = threading.Thread(target=app.refresh)
+    t_refresh.start()
+    t_refresh.join(0.05)
+    assert t_refresh.is_alive()  # waiting for the batch's session
+    release.set()
+    t_worker.join(5)
+    t_refresh.join(5)
+
+    assert in_refresh == [0]
+    assert dl.overlaps == 0
+
+
+def test_refresh_restarts_the_queue_with_the_new_snapshots_missing_photos(tmp_path):
+    dl = FakeDownloader(tmp_path / "photos")
+    worker, _ = make_worker(tmp_path, dl)
+    first, second = photo_chats(1), photo_chats(2, start=10)
+    app = AdminApp(
+        lambda: snapshot(chats=second), Allowlist(tmp_path / "a.json"), LOGIN, COOKIE, CSRF,
+        photo_dir=tmp_path / "photos", photos=worker,
+    )
+    worker.set_chats(first, autostart=False)
+    worker.run_until_done()
+    assert worker.progress() is None
+
+    app.refresh()  # restarts: one thread now downloads the new chats
+    worker.join(5)
+
+    assert dl.batches[-1] == [c.id for c in second]
+
+
+def test_page_shows_icon_progress_only_while_the_worker_runs(tmp_path):
+    dl = FakeDownloader(tmp_path / "photos")
+    worker, _ = make_worker(tmp_path, dl, batch_size=1)
+    chats = photo_chats(2)
+    h = Harness(tmp_path, lambda: snapshot(chats=chats))
+    try:
+        h.app.photos = worker
+        worker.set_chats(chats, autostart=False)
+        assert "Icons: 0/2" in h.get("/")[1]
+        worker.run_once()
+        assert "Icons: 1/2" in h.get("/")[1]
+        worker.run_until_done()
+        assert "Icons:" not in h.get("/")[1]
+    finally:
+        h.close()
+
+
+def test_server_answers_before_any_photo_is_downloaded(tmp_path):
+    dl = FakeDownloader(tmp_path / "photos")
+    worker, _ = make_worker(tmp_path, dl)
+    h = Harness(tmp_path, lambda: snapshot())
+    try:
+        h.app.photos = worker
+        worker.set_chats(snapshot().chats, autostart=False)  # queued, nothing run yet
+        resp, body = h.get("/")
+        assert resp.status == 200 and "Family" in body
+        assert dl.batches == []
+    finally:
+        h.close()
