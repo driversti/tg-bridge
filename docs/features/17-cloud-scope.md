@@ -25,10 +25,10 @@ The rule is enforced **in the bridge, in code**, never by a prompt: a chat outsi
 - Tool descriptions (or results) say that private chats are out of reach in this mode, so the model doesn't keep retrying.
 
 ### Allowlist page
-- A small web page served by **the same process** (one session file = one process, see Log 16), on its own listener, **not** reachable with the MCP token.
-- Lists only the private groups and channels the owner is in (incl. archived): icon, title, kind (group/supergroup/channel/forum), `t.me/c/<id>` link with a copy button, on/off switch. Search by title; filter by folder (folders are only a filter, never the access rule: the owner sorts folders by topic, mixing trusted and private chats).
+- Run as its own command, `tg-bridge-admin`: LM Studio starts a fresh stdio process per chat message, so the page can't live inside it. It talks to Telegram only for a few seconds at start and on "Refresh" (dialog list + small chat photos), then lets go of the session, so it doesn't hold the session lock while LM Studio works (see Log 16). When feature 11 brings a long-running networked process, the page moves into it, still on its own listener and **not** reachable with the MCP token.
+- Lists only the private groups and channels the owner is in (incl. archived): icon, title, kind (group/supergroup/channel/forum), `t.me/c/<id>` link with a copy button (basic groups have no such link), on/off switch. Search by title; filter by folder (folders are only a filter, never the access rule: the owner sorts folders by topic, mixing trusted and private chats).
 - New private chats start **off**. Changes apply on the next tool call, no restart.
-- Owner-only: listens on localhost, reached through `tailscale serve`, which passes the viewer's tailnet login; the page accepts only the configured owner login. Switches are POSTs with CSRF protection. The plan session confirms the details.
+- Owner-only: listens on `127.0.0.1` only. At start it prints a one-time login link with a random token to the terminal; opening it sets an HttpOnly, SameSite=Strict cookie, and every other request needs that cookie. Remote access (phone) goes through `tailscale serve`, so only devices in the owner's tailnet reach it, and they still need the link. Switches are POSTs with a CSRF token. Chat titles are HTML-escaped (they are attacker-controlled text).
 - The allowlist lives in the bridge's config dir (dir `700`, file `600`) and is written only by the page; the owner never edits it by hand.
 - Icons are profile photo downloads (read-only), cached on disk.
 
@@ -53,7 +53,7 @@ The rule is enforced **in the bridge, in code**, never by a prompt: a chat outsi
 - [ ] Global search for a word that appears in a DM and in a public channel → only the channel hit.
 - [ ] A private group that is off → invisible; switch it on in the page → visible on the next call; off again → gone.
 - [ ] The page lists the same private groups/channels as the app; icons and `t.me/c/…` links open the right chat.
-- [ ] Opening the page from a device signed in to another tailnet account (or from Hermes's LXC) → refused.
+- [ ] Opening the page without the login link (fresh browser, or another device) → refused; with the link → works, also from the phone via `tailscale serve`.
 - [ ] Comments of a public channel with a private discussion group are readable.
 - [ ] `scope=all` in LM Studio: everything as before.
 - [ ] LM Studio entry without `TG_BRIDGE_SCOPE`: DMs are out of reach (default `public`).

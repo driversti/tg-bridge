@@ -36,7 +36,7 @@ Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from L
 
 - [ ] 10 Recorder + SQLite archive on the home server LXC (edits, deletions, profile snapshots)
 - [ ] 11 Network MCP with auth: the bridge in its own LXC, own session; clients Hermes (LXC 110) and optionally LM Studio. Must not go live without 17.
-- [ ] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats + allowlisted private groups/channels, never DMs) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md)
+- [~] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats + allowlisted private groups/channels, never DMs) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md) · [plan](plans/17-cloud-scope.md)
 - [ ] 12 Backfill into archive
 - [ ] 13 Semantic search (local embeddings, sqlite-vec)
 - [ ] 14 Phone access via Hermes (MCP client of 11 + 17). Mostly setup once 11 and 17 are done
