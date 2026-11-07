@@ -35,7 +35,7 @@ Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from L
 ## Later stages (briefs written when we get there)
 
 - [ ] 10 Recorder + SQLite archive on the home server LXC (edits, deletions, profile snapshots)
-- [ ] 11 Network MCP with auth: the bridge in its own LXC, own session; clients Hermes (LXC 110) and optionally LM Studio. Must not go live without 17.
+- [~] 11 Network MCP with auth: the bridge in its own LXC, own session, streamable HTTP + bearer token for Hermes (LXC 110); admin page inside on loopback via `tailscale serve`, link via the Homelab bot · [features/11-network-mcp.md](features/11-network-mcp.md) · [plan](plans/11-network-mcp.md)
 - [x] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats always; any private chat, people included, only when switched on) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md) · [plan](plans/17-cloud-scope.md)
 - [ ] 12 Backfill into archive
 - [ ] 13 Semantic search (local embeddings, sqlite-vec)
