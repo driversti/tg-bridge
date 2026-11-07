@@ -168,3 +168,14 @@ Tests: every kind off/on; a user with a username and a bot with a username are h
 
 ### A5. Docs
 `design.md` §7/§8 and `setup.md`: the new rule (public always; any private chat, people included, only when switched on), tabs, confirmation, photo cache dir.
+
+## Revision B (smoke, 2026-11-07): icons load in the background
+
+The first start with people listed downloads hundreds of photos before the page opens. Owner: open the page at once, let icons arrive gradually.
+
+- `fetch_snapshot` fetches dialogs + folders only (no photos) and releases the session. The server starts right after it.
+- A background **photo worker** (one daemon `threading.Thread`) downloads missing photos for listed chats (`listed_on_page`, `photo_id` set, file missing) in **batches of 25**: connect, download the batch, disconnect, then sleep 2 s, so LM Studio can take the session between batches (a `SessionBusyError` in the worker just waits 5 s and retries the batch; any other error logs the class name and skips that chat). Order: current tab's chats are not known to the worker, so use the snapshot order (recent dialogs first).
+- One `threading.Lock` guards every Telegram use in the admin process: Refresh waits for the worker's current batch, and the worker never runs during a Refresh. After a Refresh the worker continues with the new snapshot's missing photos (restart its queue).
+- The page shows `Icons: <loaded>/<total>` in the meta line while the worker runs (counts only) and nothing when done. Rows without a file show the letter placeholder; reloading the page shows more icons. No JS polling.
+- Stopping with Ctrl+C stops the worker (daemon thread; disconnect if it is mid-batch is not required).
+- Tests (`tests/test_admin.py`, no real Telegram: inject a fake downloader): the server answers before any photo is downloaded; the worker downloads in batches and connects/disconnects per batch; a busy batch is retried; the lock keeps Refresh and a batch from overlapping (fake downloader records overlaps); after Refresh the worker picks up new missing photos; the meta line shows progress and disappears when done.
