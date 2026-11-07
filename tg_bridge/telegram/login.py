@@ -161,7 +161,7 @@ async def interactive_login(settings: Settings, method: LoginMethod, show_qr: Ca
         settings.api_id,
         settings.api_hash,
         receive_updates=(method == "qr"),
-        **client_identity(),
+        **client_identity(settings.device_name),
     )
     await client.connect()
     try:

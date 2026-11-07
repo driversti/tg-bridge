@@ -13,7 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from tg_bridge import tools
-from tg_bridge.config import Settings, load_settings
+from tg_bridge.config import Settings, load_settings, notify_bot_id
 from tg_bridge.errors import ConfigError
 from tg_bridge.logging_setup import configure_logging
 from tg_bridge.source import MessageSource
@@ -265,13 +265,28 @@ def build_server(
     return server
 
 
-def build_source(settings: Settings) -> MessageSource:
-    """The live source, wrapped in the scope filter unless the owner opted into `all`."""
+def build_live(settings: Settings) -> LiveSource:
     dialog_cache = DialogCache(settings.session_path.with_name(f"{settings.session_path.stem}.dialogs.json"))
-    live = LiveSource(ReadOnlyTelegram(settings), dialog_cache=dialog_cache)
+    return LiveSource(ReadOnlyTelegram(settings), dialog_cache=dialog_cache)
+
+
+def hidden_chats(settings: Settings, *, warn_no_bot: bool = False) -> frozenset[int]:
+    """Chats that stay invisible under `public` whatever the allowlist says: the bot chat holding login links."""
+    bot_id = notify_bot_id(settings)
+    if bot_id is None:
+        if warn_no_bot:
+            log.warning("no notify bot configured; bot chat guard inactive")
+        return frozenset()
+    return frozenset({bot_id})
+
+
+def build_source(settings: Settings, *, live: LiveSource | None = None, warn_no_bot: bool = False) -> MessageSource:
+    """The live source, wrapped in the scope filter unless the owner opted into `all`."""
+    live = live if live is not None else build_live(settings)
     if settings.scope == "all":
         return live
-    return ScopedSource(live, Allowlist(allowlist_path(settings.session_path)))
+    hidden = hidden_chats(settings, warn_no_bot=warn_no_bot)
+    return ScopedSource(live, Allowlist(allowlist_path(settings.session_path)), hidden)
 
 
 def main() -> None:

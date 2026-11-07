@@ -317,3 +317,33 @@ def test_build_source_all_is_the_bare_live_source(tmp_path):
     env = {**CREDS, "TG_BRIDGE_SESSION": str(tmp_path / "s.session"), "TG_BRIDGE_SCOPE": "all"}
 
     assert type(build_source(load_settings(env=env, config_file=tmp_path / "c"))) is LiveSource
+
+
+# --- bot chat guard wiring (feature 11) ---
+
+
+def _net_settings(tmp_path, **extra):
+    from tg_bridge.config import load_settings
+
+    env = {"TG_API_ID": "1", "TG_API_HASH": "x", "TG_BRIDGE_SESSION": str(tmp_path / "s.session"), **extra}
+    return load_settings(env=env, config_file=tmp_path / "none.env")
+
+
+def test_build_source_hides_notify_bot_chat(tmp_path):
+    from tg_bridge.server import build_source
+
+    source = build_source(_net_settings(tmp_path, TG_BRIDGE_NOTIFY_BOT_TOKEN="555:secret"))
+    assert source._hidden == frozenset({555})
+
+
+def test_build_source_warns_without_bot_only_when_asked(tmp_path, caplog):
+    import logging
+
+    from tg_bridge.server import build_source
+
+    settings = _net_settings(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        build_source(settings)
+        assert "bot chat guard inactive" not in caplog.text
+        build_source(settings, warn_no_bot=True)
+    assert "no notify bot configured; bot chat guard inactive" in caplog.text

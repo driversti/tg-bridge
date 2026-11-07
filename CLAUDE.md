@@ -1,7 +1,7 @@
 # tg-bridge
 
 Read-only MCP bridge between a local LLM (LM Studio) and the user's personal Telegram account.
-Python 3.12+, Telethon, official `mcp` SDK, `uv`, `pytest`.
+Python 3.14+, Telethon, official `mcp` SDK, `uv`, `pytest`.
 
 **Start here:** `docs/README.md` (index) → `docs/roadmap.md` (status + workflow) → your feature's brief or plan.
 Read `docs/design.md` only in the sections the brief points to.

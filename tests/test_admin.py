@@ -16,6 +16,7 @@ from tg_bridge.admin import AdminApp, Snapshot, make_server
 from tg_bridge.config import load_settings
 from tg_bridge.errors import SessionBusyError
 from tg_bridge.source.allowlist import Allowlist
+from tg_bridge.token_file import BadTokenFile, admin_token_file
 
 LOGIN, COOKIE, CSRF = "login-token", "session-cookie", "csrf-token"
 
@@ -43,7 +44,7 @@ def snapshot(**kw):
 
 
 class Harness:
-    def __init__(self, tmp_path, fetch):
+    def __init__(self, tmp_path, fetch, hidden=frozenset(), token_source=None, server_kw=None):
         self.allowlist = Allowlist(tmp_path / "a.json")
         self.photo_dir = tmp_path / "photos"
         self.photo_dir.mkdir()
@@ -51,10 +52,11 @@ class Harness:
         self.now = 1000.0
         self._fetch = fetch
         self.app = AdminApp(
-            self._counted, self.allowlist, LOGIN, COOKIE, CSRF, photo_dir=self.photo_dir, clock=lambda: self.now
+            self._counted, self.allowlist, LOGIN, COOKIE, CSRF, photo_dir=self.photo_dir, clock=lambda: self.now,
+            hidden=hidden, token_source=token_source,
         )
         self.app.refresh()  # what main() does before it starts serving
-        self.server = make_server(self.app, 0)
+        self.server = make_server(self.app, 0, **(server_kw or {}))
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.thread.start()
 
@@ -236,6 +238,14 @@ def test_search_filter(harness):
     assert "Family" in body and "Quiet Channel" not in body
     _, body = harness.get("/?q=zzz")
     assert "Family" not in body
+
+
+def test_rows_carry_normalized_title_for_live_filter(harness):
+    _, body = harness.get("/")
+    assert 'data-t="family"' in body
+    script = body[body.index("<script"):]
+    assert "'input'" in script and "Family" not in script  # live filter on typing; no chat data in JS
+    assert 'id="nomatch"' in body  # hidden "No chats match." line the script toggles
 
 
 def test_folder_filter(harness):
@@ -718,30 +728,30 @@ def test_person_without_username_gets_a_tg_link_row(tmp_path):
 
 def test_token_file_is_created_600_and_reused(tmp_path):
     session = tmp_path / "sess" / "tg.session"
-    first = admin.load_or_create_token(session)
+    first = admin_token_file(session).load_or_create()
     path = tmp_path / "sess" / "tg.admin-token"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-    assert admin.load_or_create_token(session) == first and len(first) >= 32
+    assert admin_token_file(session).load_or_create() == first and len(first) >= 32
 
 
 @pytest.mark.parametrize("content", ["", "  \n", "short"])
 def test_malformed_token_file_refuses(tmp_path, content):
     session = tmp_path / "tg.session"
     (tmp_path / "tg.admin-token").write_text(content)
-    with pytest.raises(admin.BadTokenFile, match="--new-link"):
-        admin.load_or_create_token(session)
+    with pytest.raises(BadTokenFile, match="malformed"):
+        admin_token_file(session).load_or_create()
     assert (tmp_path / "tg.admin-token").read_text() == content
 
 
 def test_cookie_and_csrf_are_stable_per_token_and_differ_between_tokens(tmp_path):
     session = tmp_path / "tg.session"
-    token = admin.load_or_create_token(session)
+    token = admin_token_file(session).load_or_create()
     c1, s1 = admin.derive_secrets(token)
-    c2, s2 = admin.derive_secrets(admin.load_or_create_token(session))
+    c2, s2 = admin.derive_secrets(admin_token_file(session).load_or_create())
     assert (c1, s1) == (c2, s2) and c1 != s1 and token not in (c1, s1)
 
-    new = admin.write_new_token(session)
+    new = admin_token_file(session).rotate()
     assert new != token and stat.S_IMODE((tmp_path / "tg.admin-token").stat().st_mode) == 0o600
     c3, s3 = admin.derive_secrets(new)
     assert c3 != c1 and s3 != s1
@@ -767,7 +777,7 @@ def test_link_flag_prints_without_telegram_or_server(monkeypatch, tmp_path, caps
     monkeypatch.setattr(admin, "make_server", _boom)
     admin.main(["--link"])
     err = capsys.readouterr().err
-    token = admin.load_or_create_token(tmp_path / "tg.session")
+    token = admin_token_file(tmp_path / "tg.session").load_or_create()
     assert f"/login?token={token}" in err
 
 
@@ -775,9 +785,9 @@ def test_new_link_flag_replaces_the_token_and_exits(monkeypatch, tmp_path, capsy
     _cli_env(monkeypatch, tmp_path)
     monkeypatch.setattr(admin, "fetch_snapshot", _boom)
     monkeypatch.setattr(admin, "make_server", _boom)
-    old = admin.load_or_create_token(tmp_path / "tg.session")
+    old = admin_token_file(tmp_path / "tg.session").load_or_create()
     admin.main(["--new-link"])
-    new = admin.load_or_create_token(tmp_path / "tg.session")
+    new = admin_token_file(tmp_path / "tg.session").load_or_create()
     assert new != old and f"token={new}" in capsys.readouterr().err
 
 
@@ -787,3 +797,95 @@ def test_malformed_token_file_exits_with_message(monkeypatch, tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         admin.main(["--link"])
     assert e.value.code == 2 and "--new-link" in capsys.readouterr().err
+
+
+# --- bot chat guard (feature 11) ---
+
+
+@pytest.fixture
+def guarded(tmp_path):
+    h = Harness(tmp_path, lambda: snapshot(), hidden=frozenset({BOT.id}))
+    yield h
+    h.close()
+
+
+def test_admin_bot_chat_locked_no_switch(guarded):
+    _, page = guarded.get("/?tab=people")
+    assert "locked (receives login links)" in page
+    assert f'name="chat_id" value="{BOT.id}"' not in page
+    assert f'name="chat_id" value="{DM.id}"' in page  # other people keep their switch
+
+
+def test_admin_post_toggle_bot_chat_400(guarded):
+    assert guarded.post("/toggle", form(BOT.id, "1", tab="people"))[0].status == 400
+    assert guarded.allowlist.load() == frozenset()
+
+
+# --- rotating token source, Secure cookie, Host check (feature 11) ---
+
+TOKEN_A, TOKEN_B = "a" * 40, "b" * 40
+
+
+class Rotating:
+    def __init__(self, token):
+        self.token = token
+
+    def __call__(self):
+        return self.token
+
+
+def cookie_for(token):
+    return admin.derive_secrets(token)[0]
+
+
+def test_token_source_rotation_logs_out_old_cookie(tmp_path):
+    src = Rotating(TOKEN_A)
+    h = Harness(tmp_path, lambda: snapshot(), token_source=src)
+    try:
+        resp, _ = h.get(f"/login?token={TOKEN_A}", cookie=None)
+        assert resp.status == 303
+        assert h.get("/", cookie=cookie_for(TOKEN_A))[0].status == 200
+        src.token = TOKEN_B
+        assert h.get("/", cookie=cookie_for(TOKEN_A))[0].status == 403
+        assert h.get(f"/login?token={TOKEN_A}", cookie=None)[0].status == 403
+        assert h.get(f"/login?token={TOKEN_B}", cookie=None)[0].status == 303
+        assert h.get("/", cookie=cookie_for(TOKEN_B))[0].status == 200
+    finally:
+        h.close()
+
+
+def test_token_source_none_refuses_login(tmp_path):
+    src = Rotating(None)
+    h = Harness(tmp_path, lambda: snapshot(), token_source=src)
+    try:
+        assert h.get(f"/login?token={TOKEN_A}", cookie=None)[0].status == 403
+        assert h.get("/login?token=", cookie=None)[0].status == 403
+        assert h.get("/", cookie="")[0].status == 403
+        assert h.post("/toggle", form(GROUP.id, "1"), cookie="")[0].status == 403
+    finally:
+        h.close()
+
+
+@pytest.mark.parametrize("secure", [True, False])
+def test_secure_cookie_flag(tmp_path, secure):
+    h = Harness(tmp_path, lambda: snapshot(), server_kw={"secure_cookie": secure})
+    try:
+        resp, _ = h.get(f"/login?token={LOGIN}", cookie=None)
+        assert ("Secure" in resp.getheader("Set-Cookie").split("; ")) is secure
+    finally:
+        h.close()
+
+
+def test_host_check(tmp_path):
+    h = Harness(tmp_path, lambda: snapshot(), server_kw={"allowed_hosts": frozenset({"tg-bridge.tail4be1a2.ts.net"})})
+    try:
+        assert h.get("/", headers={"Host": "tg-bridge.tail4be1a2.ts.net"})[0].status == 200
+        assert h.get("/", headers={"Host": "192.168.10.22:8765"})[0].status == 400
+        assert h.get(f"/login?token={LOGIN}", cookie=None, headers={"Host": "evil.example"})[0].status == 400
+        assert h.post("/refresh", {"csrf": CSRF}, headers={"Host": "evil.example"})[0].status == 400
+    finally:
+        h.close()
+
+
+def test_no_allowed_hosts_means_no_host_check(harness):
+    assert harness.get("/", headers={"Host": "anything.example"})[0].status == 200

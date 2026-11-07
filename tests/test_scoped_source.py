@@ -197,3 +197,28 @@ async def test_hidden_hits_logged_as_counts_only(tmp_path, caplog):
     with caplog.at_level(logging.INFO):
         await scoped.search_messages(squery(limit=10), None)
     assert "SECRETWORD" not in caplog.text and "Anna" not in caplog.text
+
+
+# --- bot chat guard (feature 11) ---
+
+BOTCHAT = make_user_chat(make_person(id=555, first_name="Homelab", is_bot=True))
+
+
+def build_guarded(tmp_path, **fake_kw):
+    inner = FakeSource(dialogs=[DM, PUB, BOTCHAT], **fake_kw)
+    allow = Allowlist(tmp_path / "a.json")
+    allow.set(BOTCHAT.id, True)  # the owner (or a forged request) switched it on
+    return ScopedSource(inner, allow, hidden=frozenset({BOTCHAT.id})), inner
+
+
+async def test_scoped_hides_bot_chat_from_list_and_resolution(tmp_path):
+    scoped, _ = build_guarded(tmp_path)
+    assert BOTCHAT.id not in [c.id for c in await scoped.list_dialogs()]
+    with pytest.raises(ChatNotFoundError):
+        await scoped.get_messages(BOTCHAT, mquery())
+
+
+async def test_global_search_drops_bot_chat_hits(tmp_path):
+    scoped, _ = build_guarded(tmp_path, messages={BOTCHAT.id: hits(BOTCHAT, 1, start=20), PUB.id: hits(PUB, 1)})
+    found = await scoped.search_messages(squery(limit=10), None)
+    assert [m.chat_id for m in found] == [PUB.id]

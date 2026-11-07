@@ -124,6 +124,11 @@ class LiveSource:
                 self._connected = False
                 log.info("telegram disconnected")
 
+    async def download_chat_photo(self, chat_id: int) -> bytes | None:
+        """The admin page's chat icons, through the same client as everything else."""
+        await self._ensure_connected()
+        return await self._telegram.download_chat_photo(chat_id)
+
     async def _ensure_connected(self) -> None:
         async with self._lock:
             await self._connect_locked()

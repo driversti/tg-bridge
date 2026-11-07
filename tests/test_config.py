@@ -163,3 +163,104 @@ def test_admin_port_configurable(tmp_path):
 def test_admin_port_rejected(tmp_path, value):
     with pytest.raises(ConfigError, match="TG_BRIDGE_ADMIN_PORT"):
         load_settings(env={**CREDS, "TG_BRIDGE_ADMIN_PORT": value}, config_file=tmp_path / "m")
+
+
+# --- network mode settings (feature 11) ---
+
+from tg_bridge.config import check_network_settings, notify_bot_id  # noqa: E402
+
+BOT_TOKEN = "123456:ABC-secret-part"
+
+
+def _load(tmp_path, **extra):
+    return load_settings(env={**CREDS, **extra}, config_file=tmp_path / "missing.env")
+
+
+def test_network_defaults(tmp_path):
+    settings = _load(tmp_path)
+    assert settings.device_name == "tg-bridge"
+    assert settings.mcp_host is None
+    assert settings.mcp_port == 8766
+    assert settings.admin_url is None
+    assert settings.notify_bot_token is None
+    assert settings.notify_chat_id is None
+    assert settings.net_allow_all is False
+
+
+def test_bot_token_not_in_repr(tmp_path):
+    settings = _load(tmp_path, TG_BRIDGE_NOTIFY_BOT_TOKEN=BOT_TOKEN)
+    assert "ABC-secret-part" not in repr(settings)
+    assert notify_bot_id(settings) == 123456
+
+
+def test_notify_bot_id_none_without_token(tmp_path):
+    assert notify_bot_id(_load(tmp_path)) is None
+
+
+def test_bad_bot_token_names_variable_not_value(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        _load(tmp_path, TG_BRIDGE_NOTIFY_BOT_TOKEN="abc")
+    assert "TG_BRIDGE_NOTIFY_BOT_TOKEN" in str(exc.value)
+    assert "abc" not in str(exc.value)
+
+
+@pytest.mark.parametrize("url", ["https://h.ts.net/admin", "https://h.ts.net/?x=1", "ftp://h", "h.ts.net", "https://"])
+def test_admin_url_refused(tmp_path, url):
+    with pytest.raises(ConfigError) as exc:
+        _load(tmp_path, TG_BRIDGE_ADMIN_URL=url)
+    assert "TG_BRIDGE_ADMIN_URL" in str(exc.value)
+
+
+def test_admin_url_accepted(tmp_path):
+    settings = _load(tmp_path, TG_BRIDGE_ADMIN_URL="https://tg-bridge.tail4be1a2.ts.net")
+    assert settings.admin_url == "https://tg-bridge.tail4be1a2.ts.net"
+
+
+def test_chat_id_may_be_negative(tmp_path):
+    assert _load(tmp_path, TG_BRIDGE_NOTIFY_CHAT_ID="-100123").notify_chat_id == -100123
+    with pytest.raises(ConfigError, match="TG_BRIDGE_NOTIFY_CHAT_ID"):
+        _load(tmp_path, TG_BRIDGE_NOTIFY_CHAT_ID="x")
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 65])
+def test_bad_device_name(tmp_path, name):
+    with pytest.raises(ConfigError, match="TG_BRIDGE_DEVICE_NAME"):
+        _load(tmp_path, TG_BRIDGE_DEVICE_NAME=name)
+
+
+@pytest.mark.parametrize("port", ["0", "70000", "x"])
+def test_bad_mcp_port(tmp_path, port):
+    with pytest.raises(ConfigError, match="TG_BRIDGE_MCP_PORT"):
+        _load(tmp_path, TG_BRIDGE_MCP_PORT=port)
+
+
+def test_bad_allow_all(tmp_path):
+    with pytest.raises(ConfigError, match="TG_BRIDGE_NET_ALLOW_ALL"):
+        _load(tmp_path, TG_BRIDGE_NET_ALLOW_ALL="yes")
+
+
+@pytest.mark.parametrize(
+    ("extra", "var"),
+    [
+        ({}, "TG_BRIDGE_MCP_HOST"),
+        ({"TG_BRIDGE_MCP_HOST": "0.0.0.0"}, "TG_BRIDGE_MCP_HOST"),
+        ({"TG_BRIDGE_MCP_HOST": "::"}, "TG_BRIDGE_MCP_HOST"),
+        ({"TG_BRIDGE_MCP_HOST": "*"}, "TG_BRIDGE_MCP_HOST"),
+        ({"TG_BRIDGE_MCP_HOST": "192.168.10.22", "TG_BRIDGE_MCP_PORT": "8765"}, "TG_BRIDGE_MCP_PORT"),
+        ({"TG_BRIDGE_MCP_HOST": "192.168.10.22", "TG_BRIDGE_SCOPE": "all"}, "TG_BRIDGE_NET_ALLOW_ALL"),
+    ],
+)
+def test_check_network_settings_refuses(tmp_path, extra, var):
+    with pytest.raises(ConfigError) as exc:
+        check_network_settings(_load(tmp_path, **extra))
+    assert var in str(exc.value)
+
+
+def test_check_network_settings_accepts_lan_ip(tmp_path):
+    check_network_settings(_load(tmp_path, TG_BRIDGE_MCP_HOST="192.168.10.22"))
+
+
+def test_check_network_settings_allows_all_when_forced(tmp_path):
+    check_network_settings(
+        _load(tmp_path, TG_BRIDGE_MCP_HOST="192.168.10.22", TG_BRIDGE_SCOPE="all", TG_BRIDGE_NET_ALLOW_ALL="1")
+    )

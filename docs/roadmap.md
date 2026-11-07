@@ -35,7 +35,7 @@ Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from L
 ## Later stages (briefs written when we get there)
 
 - [ ] 10 Recorder + SQLite archive on the home server LXC (edits, deletions, profile snapshots)
-- [ ] 11 Network MCP with auth: the bridge in its own LXC, own session; clients Hermes (LXC 110) and optionally LM Studio. Must not go live without 17.
+- [x] 11 Network MCP with auth: the bridge in its own LXC, own session, streamable HTTP + bearer token for Hermes (LXC 110); admin page inside on loopback via `tailscale serve`, link via the Homelab bot · [features/11-network-mcp.md](features/11-network-mcp.md) · [plan](plans/11-network-mcp.md)
 - [x] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats always; any private chat, people included, only when switched on) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md) · [plan](plans/17-cloud-scope.md)
 - [ ] 12 Backfill into archive
 - [ ] 13 Semantic search (local embeddings, sqlite-vec)
@@ -69,3 +69,5 @@ _(deviations from design, one line each)_
 - 17: `t.me/c/<N>` without a message id opens Telegram's home page; private chat links use the dialog's last message id. People without a username get `tg://user?id=`.
 - 17: global search drops hits from hidden chats and tops the page up with at most 5 extra raw pages; a word that lives mostly in DMs can end paging early (incomplete, never a leak).
 - 17: smoke 2026-11-07 on the Mac: default `public` hid DMs, a switched-on group appeared, `all` restored everything; phone via `tailscale serve` and a `public` client reading one switched-on DM are rechecked with Hermes after 11.
+- 11: implemented on `claude/feat-11-network-mcp-impl-1af11f`, deployed on CT 120 and smoke-checked by the owner (2026-11-07). Hermes compatibility (`mcp` 2.0.0 client against our 2.3 server) works in the SDK's default stateful/SSE mode. Deviation: the startup-order test makes the fake `serve` wait for the off-loop `send`, since the plan sends the link in an executor and the two are concurrent by design.
+- 11: after the smoke the admin page got a live chat filter: typing in the search box hides non-matching rows in the browser (rows carry their normalized title in `data-t`; the Filter button still filters on the server).

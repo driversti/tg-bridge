@@ -93,3 +93,23 @@ def test_unknown_kind_is_hidden_even_if_allowlisted():
 def test_public_kinds_need_no_allowlist():
     assert is_public(channel(username="pub")) and is_public(supergroup(username="pub"))
     assert not is_public(group())
+
+
+# --- bot chat guard (feature 11) ---
+
+
+def test_hidden_beats_allowlist():
+    from tg_bridge.scope import chat_visible
+    from tests.fakes import make_person, make_user_chat
+
+    bot_chat = make_user_chat(make_person(id=555, is_bot=True))
+    assert chat_visible(bot_chat, frozenset({555})) is True
+    assert chat_visible(bot_chat, frozenset({555}), frozenset({555})) is False
+
+
+def test_hidden_beats_public():
+    from tg_bridge.scope import chat_visible
+    from tests.fakes import make_chat
+
+    pub = make_chat(id=-1001, kind="channel", username="news")
+    assert chat_visible(pub, frozenset(), frozenset({-1001})) is False

@@ -2,10 +2,12 @@
 
 import logging
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
@@ -26,7 +28,12 @@ DEFAULTS = {
     "TG_BRIDGE_MAX_DOWNLOAD_MB": "200",
     "TG_BRIDGE_SCOPE": "public",
     "TG_BRIDGE_ADMIN_PORT": "8765",
+    "TG_BRIDGE_DEVICE_NAME": "tg-bridge",
+    "TG_BRIDGE_MCP_PORT": "8766",
+    "TG_BRIDGE_NET_ALLOW_ALL": "0",
 }
+
+WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::", "*"})
 
 
 def default_config_file() -> Path:
@@ -46,6 +53,14 @@ class Settings:
     max_download_bytes: int
     scope: Literal["all", "public"]
     admin_port: int
+    # Network mode (feature 11). Safe defaults so stdio is unaffected.
+    device_name: str = "tg-bridge"
+    mcp_host: str | None = None
+    mcp_port: int = 8766
+    admin_url: str | None = None
+    notify_bot_token: str | None = field(default=None, repr=False)
+    notify_chat_id: int | None = None
+    net_allow_all: bool = False
 
 
 def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None = None) -> Settings:
@@ -90,6 +105,34 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
     if not (port_raw.isascii() and port_raw.isdigit()) or not 1 <= int(port_raw) <= 65535:
         raise ConfigError("TG_BRIDGE_ADMIN_PORT must be an integer from 1 to 65535")
 
+    device_name = values["TG_BRIDGE_DEVICE_NAME"].strip()
+    if not 1 <= len(device_name) <= 64:
+        raise ConfigError("TG_BRIDGE_DEVICE_NAME must be 1 to 64 characters")
+
+    mcp_port_raw = values["TG_BRIDGE_MCP_PORT"].strip()
+    if not (mcp_port_raw.isascii() and mcp_port_raw.isdigit()) or not 1 <= int(mcp_port_raw) <= 65535:
+        raise ConfigError("TG_BRIDGE_MCP_PORT must be an integer from 1 to 65535")
+
+    admin_url = values.get("TG_BRIDGE_ADMIN_URL", "").strip() or None
+    if admin_url is not None:
+        admin_url = _check_admin_url(admin_url)
+
+    bot_token = values.get("TG_BRIDGE_NOTIFY_BOT_TOKEN", "").strip() or None
+    if bot_token is not None and not re.fullmatch(r"\d+:\S+", bot_token):
+        raise ConfigError("TG_BRIDGE_NOTIFY_BOT_TOKEN must look like <digits>:<rest>")
+
+    chat_id_raw = values.get("TG_BRIDGE_NOTIFY_CHAT_ID", "").strip()
+    chat_id: int | None = None
+    if chat_id_raw:
+        try:
+            chat_id = int(chat_id_raw)
+        except ValueError:
+            raise ConfigError("TG_BRIDGE_NOTIFY_CHAT_ID must be an integer") from None
+
+    allow_all_raw = values["TG_BRIDGE_NET_ALLOW_ALL"].strip()
+    if allow_all_raw not in ("0", "1"):
+        raise ConfigError("TG_BRIDGE_NET_ALLOW_ALL must be 1 or 0")
+
     return Settings(
         api_id=int(api_id_raw),
         api_hash=required("TG_API_HASH"),
@@ -101,7 +144,49 @@ def load_settings(env: Mapping[str, str] | None = None, config_file: Path | None
         max_download_bytes=int(max_mb_raw) * 1024 * 1024,
         scope=scope,  # type: ignore[arg-type]  # validated above
         admin_port=int(port_raw),
+        device_name=device_name,
+        mcp_host=values.get("TG_BRIDGE_MCP_HOST", "").strip() or None,
+        mcp_port=int(mcp_port_raw),
+        admin_url=admin_url,
+        notify_bot_token=bot_token,
+        notify_chat_id=chat_id,
+        net_allow_all=allow_all_raw == "1",
     )
+
+
+def check_network_settings(settings: Settings) -> None:
+    """Extra rules for the long-running network process; raises ConfigError naming the variable."""
+    if settings.mcp_host is None or settings.mcp_host.strip() in WILDCARD_HOSTS:
+        raise ConfigError("TG_BRIDGE_MCP_HOST must be an explicit address (not unset, 0.0.0.0, :: or *)")
+    if settings.scope == "all" and not settings.net_allow_all:
+        raise ConfigError("network mode refuses TG_BRIDGE_SCOPE=all unless TG_BRIDGE_NET_ALLOW_ALL=1")
+    if settings.mcp_port == settings.admin_port:
+        raise ConfigError("TG_BRIDGE_MCP_PORT must differ from TG_BRIDGE_ADMIN_PORT")
+
+
+def notify_bot_id(settings: Settings) -> int | None:
+    """The Homelab bot's user id: the numeric prefix of its token."""
+    if settings.notify_bot_token is None:
+        return None
+    return int(settings.notify_bot_token.split(":", 1)[0])
+
+
+def _check_admin_url(raw: str) -> str:
+    parts = urlsplit(raw)
+    try:
+        port_ok = parts.port is None or parts.port > 0
+    except ValueError:
+        port_ok = False
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or not port_ok
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        raise ConfigError("TG_BRIDGE_ADMIN_URL must look like http(s)://host[:port] with no path or query")
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def _path(raw: str) -> Path:
