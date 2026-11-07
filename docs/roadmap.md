@@ -36,7 +36,7 @@ Stage 1 is done when scenarios 1–4 from `design.md` §2 work end-to-end from L
 
 - [ ] 10 Recorder + SQLite archive on the home server LXC (edits, deletions, profile snapshots)
 - [ ] 11 Network MCP with auth: the bridge in its own LXC, own session; clients Hermes (LXC 110) and optionally LM Studio. Must not go live without 17.
-- [~] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats + allowlisted private groups/channels, never DMs) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md) · [plan](plans/17-cloud-scope.md)
+- [x] 17 Cloud scope: `TG_BRIDGE_SCOPE=public` (public chats always; any private chat, people included, only when switched on) and an owner-only allowlist page · [features/17-cloud-scope.md](features/17-cloud-scope.md) · [plan](plans/17-cloud-scope.md)
 - [ ] 12 Backfill into archive
 - [ ] 13 Semantic search (local embeddings, sqlite-vec)
 - [ ] 14 Phone access via Hermes (MCP client of 11 + 17). Mostly setup once 11 and 17 are done
@@ -64,3 +64,8 @@ _(deviations from design, one line each)_
 - 16: first smoke failed on every tool with `database is locked`: tg-bridge was also a local MCP server in Claude Code, and its long-lived processes held the Telethon session's write lock. Removed it from Claude Code (never run two bridges on one session file); the error now reads as `SessionBusyError`.
 - 16: a ~26B model (gemma-4-26b) never found `get_messages(comments_of=…)` at the end of a long docstring and said it cannot read comments. Comments became their own tool `get_comments`, and channel post lines show `💬N` plus one ready `get_comments` call per page; recheck: the model called `get_comments` on its own.
 - 16: Telegram refusals (`RPCError`) carry a plain reason instead of a generic tool error; for comments the text says to skip the post and go on, so one refused thread does not end a series.
+- 17: brief said DMs are never visible under `public`; after the first smoke the owner changed it to "public always, any private chat (people, bots, Saved Messages included) only when switched on"; switching on a 1:1 chat asks for confirmation.
+- 17: the allowlist page is its own command `tg-bridge-admin`, not part of the MCP process (LM Studio starts a fresh stdio process per message). It touches Telegram only at start, on Refresh and in short icon batches (25 per session, 2 s pause), so it doesn't lock LM Studio out. Login: a stable token link (`--link`, `--new-link`) and a year-long cookie instead of Tailscale identity headers.
+- 17: `t.me/c/<N>` without a message id opens Telegram's home page; private chat links use the dialog's last message id. People without a username get `tg://user?id=`.
+- 17: global search drops hits from hidden chats and tops the page up with at most 5 extra raw pages; a word that lives mostly in DMs can end paging early (incomplete, never a leak).
+- 17: smoke 2026-11-07 on the Mac: default `public` hid DMs, a switched-on group appeared, `all` restored everything; phone via `tailscale serve` and a `public` client reading one switched-on DM are rechecked with Hermes after 11.
