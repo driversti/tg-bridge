@@ -75,6 +75,19 @@ def test_user_dialog():
     assert chat.is_archived is False and chat.is_forum is False
 
 
+def test_top_message_id_comes_from_the_dialog_message_or_the_raw_dialog():
+    entity = tl_channel(megagroup=True)
+    with_message = dialog(entity, id=-1000000000010)
+    with_message.message = SimpleNamespace(id=77)
+    assert chat_from_dialog(with_message).top_message_id == 77
+
+    raw = raw_dialog()
+    raw.top_message = 55
+    assert chat_from_dialog(dialog(entity, id=-1000000000010, raw=raw)).top_message_id == 55
+
+    assert chat_from_dialog(dialog(entity, id=-1000000000010)).top_message_id is None
+
+
 def test_bot_dialog():
     chat = chat_from_dialog(dialog(tl_user(bot=True, first_name="Helper", last_name=None)))
 

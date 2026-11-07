@@ -9,7 +9,7 @@ def chats():
     return [
         make_chat(
             id=-1001, title="Family 🏠", username="famchat", is_forum=True, is_muted=True, is_unread=True, has_unread_mention=True,
-            is_creator=True, photo_id=123,
+            is_creator=True, photo_id=123, top_message_id=4321,
         ),
         make_user_chat(
             make_person(id=7, phone="48123", is_deleted=True, is_contact=True), is_archived=True, last_message_at=None,
@@ -114,10 +114,10 @@ def test_old_file_without_new_fields_loads_with_defaults(tmp_path):
     cache.save(chats(), folders(), now=1.0)
     data = json.loads(path.read_text())
     for c in data["chats"]:
-        for key in ("is_self", "is_creator", "photo_id"):
+        for key in ("is_self", "is_creator", "photo_id", "top_message_id"):
             del c[key]
     path.write_text(json.dumps(data))
 
     loaded, _, _ = cache.load(now=1.0, max_age=300)
 
-    assert all((c.is_self, c.is_creator, c.photo_id) == (False, False, None) for c in loaded)
+    assert all((c.is_self, c.is_creator, c.photo_id, c.top_message_id) == (False, False, None, None) for c in loaded)

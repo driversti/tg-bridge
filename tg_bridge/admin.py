@@ -5,12 +5,14 @@ A separate process on purpose: LM Studio starts a fresh stdio server per chat me
 it. It talks to Telegram for a few seconds at start and on Refresh, then lets go of the session.
 
 Security model: binds 127.0.0.1 only (phone access goes through `tailscale serve`); every route but /login needs
-the session cookie, which only the one-time login link printed to the terminal hands out; every POST needs a CSRF
+the session cookie, which only the login link hands out (stable: the token lives in a 600 file next to the session); every POST needs a CSRF
 token. Chat titles are attacker-controlled text and are always HTML-escaped. Nothing secret is ever logged: the
 request log of http.server contains the login token, so it is switched off.
 """
 
+import argparse
 import asyncio
+import hashlib
 import hmac
 import html
 import logging
@@ -46,6 +48,8 @@ log = logging.getLogger(__name__)
 
 HOST = "127.0.0.1"
 COOKIE_NAME = "tgb_admin"
+COOKIE_MAX_AGE = 365 * 24 * 3600
+MIN_TOKEN_LEN = 32
 MAX_BODY = 16 * 1024
 BUSY_TEXT = "Telegram session is busy (LM Studio is using it); try Refresh in a moment."
 REFRESH_COOLDOWN = 10.0  # seconds; a double click must not fetch twice
@@ -60,6 +64,55 @@ _USERNAME = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 def photo_dir_for(session_path: Path) -> Path:
     return session_path.with_name(f"{session_path.stem}.photos")
+
+
+class BadTokenFile(Exception):
+    """The login token file exists but is empty or malformed; never replaced silently."""
+
+
+def token_path_for(session_path: Path) -> Path:
+    return session_path.with_name(f"{session_path.stem}.admin-token")
+
+
+def _write_token(path: Path, token: str) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # mkstemp creates the file 600; replace() makes the swap atomic.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(token + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def write_new_token(session_path: Path) -> str:
+    token = secrets.token_urlsafe(32)
+    _write_token(token_path_for(session_path), token)
+    return token
+
+
+def load_or_create_token(session_path: Path) -> str:
+    path = token_path_for(session_path)
+    try:
+        token = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return write_new_token(session_path)
+    except (OSError, ValueError) as e:
+        raise BadTokenFile(f"cannot read the login token file ({type(e).__name__}); run with --new-link") from None
+    if len(token) < MIN_TOKEN_LEN or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+        raise BadTokenFile("the login token file is malformed; run with --new-link to replace it")
+    return token
+
+
+def derive_secrets(token: str) -> tuple[str, str]:
+    """(session cookie, CSRF token): stable across restarts, different for every login token."""
+    key = token.encode("ascii")
+    return (
+        hmac.new(key, b"cookie", hashlib.sha256).hexdigest(),
+        hmac.new(key, b"csrf", hashlib.sha256).hexdigest(),
+    )
 
 
 def listed_on_page(chat: Chat) -> bool:
@@ -374,7 +427,8 @@ class AdminApp:
             tags += '<span class="tag shared">shared with cloud</span>'
         link = _tme_link(chat)
         link_html = (
-            f'<button type="button" class="copy" data-link="{html.escape(link, quote=True)}">Copy link</button>'
+            f'<a class="open" href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer">Open</a> '
+            f'<button type="button" class="copy" data-link="{html.escape(link, quote=True)}">Copy</button>'
             if link
             else '<span class="meta">no link</span>'
         )
@@ -415,13 +469,20 @@ def _hidden(fields: dict[str, str]) -> str:
 
 
 def _tme_link(chat: Chat) -> str | None:
-    """`-100N` ids (supergroups, channels) have a t.me/c/N link; people and bots a t.me/<username> one."""
-    if chat.kind in ("user", "bot"):
-        if not chat.is_self and chat.username and _USERNAME.fullmatch(chat.username):
-            return f"https://t.me/{chat.username}"
+    """Public chats and people by username; private `-100N` chats need a message id, or t.me/c/N opens Telegram's home."""
+    if chat.is_self or chat.kind == "group":
         return None
+    valid_name = bool(chat.username and _USERNAME.fullmatch(chat.username))
+    if chat.kind in ("user", "bot"):
+        if valid_name:
+            return f"https://t.me/{chat.username}"
+        return f"tg://user?id={chat.id}" if chat.id > 0 else None
+    if valid_name:
+        return f"https://t.me/{chat.username}"
     text = str(chat.id)
-    return f"https://t.me/c/{text[4:]}" if text.startswith("-100") and len(text) > 4 else None
+    if text.startswith("-100") and len(text) > 4 and chat.top_message_id:
+        return f"https://t.me/c/{text[4:]}/{chat.top_message_id}"
+    return None
 
 
 _CSS = (
@@ -444,7 +505,10 @@ _CSS = (
 # No chat data in script: the copy button carries only the link, in a data attribute; the texts are generic.
 _JS = (
     "document.addEventListener('click',function(e){var b=e.target.closest('[data-link]');"
-    "if(b){navigator.clipboard.writeText(b.dataset.link)}});"
+    "if(!b||b.tagName==='A')return;var t=b.dataset.t||(b.dataset.t=b.textContent);"
+    "var done=function(m){b.textContent=m;clearTimeout(b._h);b._h=setTimeout(function(){b.textContent=t},1500)};"
+    "try{navigator.clipboard.writeText(b.dataset.link).then(function(){done('Copied \\u2713')},"
+    "function(){done('Copy failed')})}catch(x){done('Copy failed')}});"
     "document.addEventListener('submit',function(e){var f=e.target;"
     "if(f.querySelector('[data-confirm]')&&!confirm('The cloud model will be able to read this whole conversation. "
     "Switch it on?')){e.preventDefault();return}"
@@ -523,7 +587,7 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
             if url.path == "/login":
                 token = query.get("token", "")
                 if hmac.compare_digest(token, app.login_token):
-                    cookie = f"{COOKIE_NAME}={app.session_cookie}; HttpOnly; SameSite=Strict; Path=/"
+                    cookie = f"{COOKIE_NAME}={app.session_cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_MAX_AGE}"
                     return self._redirect("/", Set_Cookie=cookie)
                 return self._forbidden()
             if not self._authorized():
@@ -576,7 +640,13 @@ def make_server(app: AdminApp, port: int) -> HTTPServer:
     return HTTPServer((HOST, port), Handler)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="tg-bridge-admin")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--link", action="store_true", help="print the login link and exit")
+    group.add_argument("--new-link", action="store_true", help="replace the login token (old links and cookies stop working), print the link and exit")
+    args = parser.parse_args(argv)
+
     configure_logging()
     try:
         settings = load_settings()
@@ -584,15 +654,26 @@ def main() -> None:
         print(f"tg-bridge-admin: {e}", file=sys.stderr)
         sys.exit(2)
 
+    try:
+        token = write_new_token(settings.session_path) if args.new_link else load_or_create_token(settings.session_path)
+    except BadTokenFile as e:
+        print(f"tg-bridge-admin: {e}", file=sys.stderr)
+        sys.exit(2)
+    # Outside `logging` on purpose: the token must never reach a log.
+    if args.link or args.new_link:
+        print(f"Open http://{HOST}:{settings.admin_port}/login?token={token}", file=sys.stderr)
+        return
+    cookie, csrf = derive_secrets(token)
+
     photo_dir = photo_dir_for(settings.session_path)
     lock = threading.Lock()
     worker = PhotoWorker(lambda chats: asyncio.run(download_photos(settings, photo_dir, chats)), photo_dir, lock)
     app = AdminApp(
         lambda: asyncio.run(fetch_snapshot(settings)),
         Allowlist(allowlist_path(settings.session_path)),
-        login_token=secrets.token_urlsafe(32),
-        session_cookie=secrets.token_urlsafe(32),
-        csrf=secrets.token_urlsafe(32),
+        login_token=token,
+        session_cookie=cookie,
+        csrf=csrf,
         photo_dir=photo_dir,
         lock=lock,
         photos=worker,
@@ -605,7 +686,6 @@ def main() -> None:
     except OSError as e:
         print(f"tg-bridge-admin: cannot listen on {HOST}:{settings.admin_port} ({e.strerror})", file=sys.stderr)
         sys.exit(2)
-    # Outside `logging` on purpose: the token must never reach a log.
     port = server.server_address[1]
     print(f"Open http://{HOST}:{port}/login?token={app.login_token}", file=sys.stderr)
     print(

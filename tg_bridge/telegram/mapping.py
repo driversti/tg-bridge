@@ -75,7 +75,16 @@ def chat_from_dialog(
         is_self=is_self,
         is_creator=False if isinstance(entity, tl.User) else bool(getattr(entity, "creator", False)),
         photo_id=_photo_id(entity),
+        top_message_id=_top_message_id(dialog, raw),
     )
+
+
+def _top_message_id(dialog, raw) -> int | None:
+    """Already in the dialog list, so a link needs no extra request."""
+    for value in (getattr(getattr(dialog, "message", None), "id", None), getattr(raw, "top_message", None)):
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
 
 
 def _photo_id(entity) -> int | None:

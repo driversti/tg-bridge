@@ -94,8 +94,8 @@ uv run tg-bridge-admin
 ```
 
 Open the `http://127.0.0.1:<port>/login?token=...` link it prints (the link sets a cookie; without it every
-request is refused). The page has tabs: Groups, Channels, People and Mine (what you created, plus Saved Messages). Each row shows
-icon, title, kind and a link (`t.me/c/...`, or `t.me/<username>` for people and bots); new chats start off, and a switch
+request is refused). The link is stable: the token lives in `<session stem>.admin-token` next to the session (mode `600`), so bookmark it; the cookie lasts a year. `uv run tg-bridge-admin --link` prints it again without starting anything; `--new-link` replaces the token (old links and cookies stop working). Rows have Open and Copy for the link: public chats `t.me/<username>`, private ones `t.me/c/<id>/<latest message>`, people and bots `t.me/<username>` or `tg://user?id=`. The page has tabs: Groups, Channels, People and Mine (what you created, plus Saved Messages). Each row shows
+icon, title, kind and a link; new chats start off, and a switch
 applies on the next tool call. Switching on a person, a bot or Saved Messages asks for confirmation. Small chat icons
 are cached in `<session stem>.photos/` next to the session (dir `700`), so a second Refresh only fetches changed ones. The page opens at once; icons arrive in the background (25 per short session, with a pause between batches; `Icons: n/m` shows progress, reload to see more). It reads Telegram only at start, on
 Refresh and in those short batches, so it does not keep the session locked while LM Studio works. If the session is busy, press Refresh

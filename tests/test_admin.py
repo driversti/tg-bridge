@@ -23,8 +23,8 @@ GROUP = make_chat(id=-555, kind="group", title="Family", username=None)
 MINE_PRIV = make_chat(id=-1001000000011, kind="supergroup", title="My Own Club", username=None, is_creator=True, photo_id=3)
 MINE_PUB = make_chat(id=-1001000000012, kind="channel", title="My Public Blog", username="myblog", is_creator=True)
 SAVED = make_user_chat(make_person(id=99, first_name="Owner", username="owner_u"), title="Saved Messages", is_self=True)
-EVIL = make_chat(id=-1001000000007, kind="supergroup", title="<script>alert(1)</script> Club", username=None)
-CHANNEL_PRIV = make_chat(id=-1001000000009, kind="channel", title="Quiet Channel", username=None, is_archived=True)
+EVIL = make_chat(id=-1001000000007, kind="supergroup", title="<script>alert(1)</script> Club", username=None, top_message_id=15)
+CHANNEL_PRIV = make_chat(id=-1001000000009, kind="channel", title="Quiet Channel", username=None, is_archived=True, top_message_id=9)
 FORUM = make_chat(id=-1001000000010, kind="supergroup", title="Forum Zone", username=None, is_forum=True)
 PUBLIC = make_chat(id=-1001000000008, kind="channel", title="Public News", username="pubnews")
 DM = make_user_chat(make_person(id=42, first_name="Anna", last_name="K", username="anna_k"), photo_id=8)
@@ -194,19 +194,21 @@ def test_titles_are_escaped(harness):
 
 def test_links_and_kind_labels(harness):
     _, body = harness.get("/")
-    assert 'data-link="https://t.me/c/1000000007"' in body  # the id is -100N: the link carries N only
+    assert 'data-link="https://t.me/c/1000000007/15"' in body  # the id is -100N: the link carries N and a message id
     assert "t.me/c/555" not in body
     assert "no link" in body  # the basic group
+    assert 'href="https://t.me/c/1000000007/15" target="_blank" rel="noopener noreferrer"' in body
+    assert ">Copy<" in body
     assert "forum" in body and "supergroup" in body
     _, body = harness.get("/?tab=channels")
-    assert 'data-link="https://t.me/c/1000000009"' in body and "archived" in body and "channel" in body
+    assert 'data-link="https://t.me/c/1000000009/9"' in body and "archived" in body and "channel" in body
 
 
 def test_people_links_use_the_username_only_when_there_is_one(harness):
     _, body = harness.get("/?tab=people")
     assert 'data-link="https://t.me/anna_k"' in body
     row = next(r for r in body.split('<div class="row') if "Helper Bot" in r)
-    assert "no link" in row and 'data-link="' not in row
+    assert 'data-link="tg://user?id=77"' in row and "t.me/" not in row
     _, body = harness.get("/?tab=mine")
     assert "t.me/owner_u" not in body
 
@@ -216,7 +218,7 @@ def test_hostile_username_gets_no_link(tmp_path):
     h = Harness(tmp_path, lambda: snapshot(chats=[evil]))
     try:
         _, body = h.get("/?tab=people")
-        assert 'data-link="' not in body and "<script>alert" not in body
+        assert 'data-link="tg://user?id=5"' in body and "t.me/" not in body and "<script>alert" not in body
     finally:
         h.close()
 
@@ -679,3 +681,109 @@ def test_server_answers_before_any_photo_is_downloaded(tmp_path):
         assert dl.batches == []
     finally:
         h.close()
+
+
+def test_tme_link_rules():
+    link = admin._tme_link
+    assert link(make_chat(id=-1001000000001, kind="channel", username="pub", top_message_id=3)) == "https://t.me/pub"
+    assert link(make_chat(id=-1001000000001, kind="supergroup", username=None, top_message_id=3)) == "https://t.me/c/1000000001/3"
+    assert link(make_chat(id=-1001000000001, kind="supergroup", username=None)) is None  # no top message id
+    assert link(make_chat(id=-1001000000001, kind="supergroup", username="bad name!", top_message_id=3)) == "https://t.me/c/1000000001/3"
+    assert link(make_chat(id=-5, kind="group", username=None, top_message_id=3)) is None
+    assert link(make_user_chat(make_person(id=42, username="anna_k"))) == "https://t.me/anna_k"
+    assert link(make_user_chat(make_person(id=42, username=None))) == "tg://user?id=42"
+    assert link(make_user_chat(make_person(id=42, username="a b"))) == "tg://user?id=42"
+    assert link(make_user_chat(make_person(id=42, username="x"), is_self=True)) is None
+
+
+def test_script_has_feedback_texts_and_no_chat_data(harness):
+    _, body = harness.get("/")
+    script = body.split("<script", 1)[1]
+    assert "Copied" in script and "Copy failed" in script
+    assert "Family" not in script and "t.me" not in script
+
+
+def test_person_without_username_gets_a_tg_link_row(tmp_path):
+    h = Harness(tmp_path, lambda: snapshot())
+    try:
+        _, body = h.get("/?tab=people")
+        row = next(r for r in body.split('<div class="row') if "Helper Bot" in r)
+        assert 'href="tg://user?id=77"' in row
+    finally:
+        h.close()
+
+
+# --- stable login link (C1) ---
+
+
+def test_token_file_is_created_600_and_reused(tmp_path):
+    session = tmp_path / "sess" / "tg.session"
+    first = admin.load_or_create_token(session)
+    path = tmp_path / "sess" / "tg.admin-token"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert admin.load_or_create_token(session) == first and len(first) >= 32
+
+
+@pytest.mark.parametrize("content", ["", "  \n", "short"])
+def test_malformed_token_file_refuses(tmp_path, content):
+    session = tmp_path / "tg.session"
+    (tmp_path / "tg.admin-token").write_text(content)
+    with pytest.raises(admin.BadTokenFile, match="--new-link"):
+        admin.load_or_create_token(session)
+    assert (tmp_path / "tg.admin-token").read_text() == content
+
+
+def test_cookie_and_csrf_are_stable_per_token_and_differ_between_tokens(tmp_path):
+    session = tmp_path / "tg.session"
+    token = admin.load_or_create_token(session)
+    c1, s1 = admin.derive_secrets(token)
+    c2, s2 = admin.derive_secrets(admin.load_or_create_token(session))
+    assert (c1, s1) == (c2, s2) and c1 != s1 and token not in (c1, s1)
+
+    new = admin.write_new_token(session)
+    assert new != token and stat.S_IMODE((tmp_path / "tg.admin-token").stat().st_mode) == 0o600
+    c3, s3 = admin.derive_secrets(new)
+    assert c3 != c1 and s3 != s1
+
+
+def test_login_cookie_lasts_a_year(harness):
+    resp, _ = harness.get(f"/login?token={LOGIN}", cookie=None)
+    assert "Max-Age=31536000" in resp.getheader("Set-Cookie")
+
+
+def _cli_env(monkeypatch, tmp_path):
+    env = {**CREDS, "TG_BRIDGE_SESSION": str(tmp_path / "tg.session")}
+    monkeypatch.setattr(admin, "load_settings", lambda: load_settings(env=env, config_file=tmp_path / "none.env"))
+
+
+def _boom(*a, **k):
+    raise AssertionError("must not touch Telegram")
+
+
+def test_link_flag_prints_without_telegram_or_server(monkeypatch, tmp_path, capsys):
+    _cli_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(admin, "fetch_snapshot", _boom)
+    monkeypatch.setattr(admin, "make_server", _boom)
+    admin.main(["--link"])
+    err = capsys.readouterr().err
+    token = admin.load_or_create_token(tmp_path / "tg.session")
+    assert f"/login?token={token}" in err
+
+
+def test_new_link_flag_replaces_the_token_and_exits(monkeypatch, tmp_path, capsys):
+    _cli_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(admin, "fetch_snapshot", _boom)
+    monkeypatch.setattr(admin, "make_server", _boom)
+    old = admin.load_or_create_token(tmp_path / "tg.session")
+    admin.main(["--new-link"])
+    new = admin.load_or_create_token(tmp_path / "tg.session")
+    assert new != old and f"token={new}" in capsys.readouterr().err
+
+
+def test_malformed_token_file_exits_with_message(monkeypatch, tmp_path, capsys):
+    _cli_env(monkeypatch, tmp_path)
+    (tmp_path / "tg.admin-token").write_text("")
+    with pytest.raises(SystemExit) as e:
+        admin.main(["--link"])
+    assert e.value.code == 2 and "--new-link" in capsys.readouterr().err
