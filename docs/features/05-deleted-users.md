@@ -18,3 +18,5 @@ Find every 1:1 dialog whose peer account is now deleted and save each conversati
 ## Smoke checklist (manual, real account)
 - [ ] The count matches the "Deleted Account" dialogs visible in the Telegram app.
 - [ ] Each file contains the full history.
+- [ ] A second `export_deleted_users` call writes no new files (every chat "already exported").
+- [ ] A contact card, if the account has one, shows as an `Identity guess` line in the file header and in `find_deleted_users`, worded as a guess.

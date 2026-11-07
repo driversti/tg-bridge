@@ -172,8 +172,8 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 | `get_comments(chat, post?, period…, cursor?, limit?)` | A channel post's comment thread, oldest first, author and comment links per line, no membership in the discussion group needed; `post` may be left out when a cursor continues the thread | compact lines + `next_cursor` |
 | `search_messages(query, chat? \| folder?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat, in a folder's chats, or globally | compact lines with chat name + link |
 | `export_chat(chat, period…, format="md")` | Write a conversation to a Markdown file | file path, message count, date range |
-| `find_deleted_users()` | Dialogs whose peer account is deleted | chat id, last known identity, message count, first/last date |
-| `export_deleted_users(dir?)` | One Markdown file per deleted-user dialog | list of paths + counts |
+| `find_deleted_users()` | 1:1 dialogs whose peer account is deleted (archived included; under `public` only switched-on private chats) | one line per chat: id, message count, first → last date, archived flag, name guesses from contact cards; totals in the first line |
+| `export_deleted_users()` | One Markdown file per deleted-user dialog in `<EXPORT_DIR>/deleted-users/`; idempotent (complete files skipped, unfinished resumed), one 40 s budget per call | one line per chat with path + count; `Next: call export_deleted_users()` while chats remain |
 | `download_media(chat, message_id)` | Save one message's media to the download dir | file path, size |
 
 **Compact message line** (builder may refine, must stay token-cheap):

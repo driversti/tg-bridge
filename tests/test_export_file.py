@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tests.fakes import FakeSource, make_chat, make_message, make_person
+from tests.fakes import FakeSource, make_chat, make_message, make_person, make_user_chat
 from tg_bridge import export
 from tg_bridge.errors import ExportFileError, RateLimitedError
 from tg_bridge.export import ExportResult, export_chat_file
@@ -297,3 +297,43 @@ async def test_resume_ignores_other_chats_files(tmp_path, monkeypatch):
 
     with pytest.raises(ExportFileError, match="^No unfinished export of this chat"):
         await run_chunk(FakeSource(messages={CHAT.id: plain_msgs(5)}), tmp_path, resume=True)
+
+
+async def test_budget_argument_pauses_earlier(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    src = FakeSource(messages={CHAT.id: plain_msgs(5)})
+
+    result = await export_chat_file(
+        src, INFO, Period(None, None), tmp_path, W, NOW, sleep=Sleeps(), clock=Clock(6), budget=5.0
+    )
+
+    assert (result.count, result.paused) == (2, True)  # the default 40 s would have allowed the next page
+
+
+async def test_identity_lines_reach_the_header(tmp_path):
+    chat = make_user_chat(make_person(id=777, is_deleted=True))
+    result = await export_chat_file(
+        FakeSource(messages={chat.id: [make_message(id=1, chat_id=chat.id, date=T0)]}),
+        ChatInfo(chat, None, None, (), None), Period(None, None), tmp_path, W, NOW,
+        sleep=Sleeps(), identity=["Olena P (a guess)"],
+    )
+
+    assert "- Identity guess: Olena P (a guess)\n" in result.path.read_text(encoding="utf-8")
+
+
+async def test_latest_export_states(tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "EXPORT_PAGE", 2)
+    assert export.latest_export(tmp_path, CHAT) is None
+    assert export.latest_export(tmp_path / "missing", CHAT) is None
+
+    paused = await run_chunk(FakeSource(messages={CHAT.id: plain_msgs(5)}), tmp_path)
+    assert export.latest_export(tmp_path, CHAT) == (paused.path, "unfinished")
+
+    done = await run_chunk(FakeSource(messages={CHAT.id: plain_msgs(1)}), tmp_path, step=0, now=NOW + timedelta(seconds=5))
+    assert export.latest_export(tmp_path, CHAT) == (done.path, "complete")
+
+
+async def test_latest_export_none_for_incomplete_file_without_note(tmp_path):
+    (tmp_path / "x_-5_a_b_c.md").write_text("# t\n\n---\nExported 1 message · INCOMPLETE: x\n", encoding="utf-8")
+
+    assert export.latest_export(tmp_path, CHAT) is None

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from telethon.helpers import TotalList
 from telethon.errors import ChannelPrivateError, FloodWaitError
 from telethon.tl import types as tl
 
@@ -9,7 +10,7 @@ from tests.fakes import make_chat, make_person, make_user_chat
 from tests.test_config import CREDS
 from tg_bridge.config import load_settings
 from tg_bridge.errors import NotLoggedInError, RateLimitedError
-from tg_bridge.source import MessageQuery
+from tg_bridge.source import HistoryStats, MessageQuery
 from tg_bridge.telegram.client import ReadOnlyTelegram
 from tests.telegram.test_mapping import forum_topic, tl_channel, tl_filter, tl_msg, tl_user, user
 
@@ -38,6 +39,10 @@ class FakeTelethonClient:
         self.messages_by_id: dict[int, object] = {}  # raw messages get_messages(ids=...) can find
         self.get_messages_calls: list[tuple] = []  # (entity, ids)
         self.get_messages_error: Exception | None = None
+        self.history_total = 0  # TotalList.total of get_messages(entity, limit=...)
+        self.history_page: list = []
+        self.history_calls: list[tuple] = []  # (entity, kwargs)
+        self.history_error: Exception | None = None
         self.download_chunks: list = []
         self.download_fail_after: tuple[int, Exception] | None = None
         self.iter_download_calls: list[tuple] = []  # (file, offset, file_size, dc_id, request_size)
@@ -80,7 +85,14 @@ class FakeTelethonClient:
                 raise self.iter_messages_fail_after[1]
             yield m
 
-    async def get_messages(self, entity, ids):
+    async def get_messages(self, entity, ids=None, **kwargs):
+        if ids is None:
+            self.history_calls.append((entity, kwargs))
+            if self.history_error:
+                raise self.history_error
+            page = TotalList(self.history_page)
+            page.total = self.history_total
+            return page
         self.get_messages_calls.append((entity, ids))
         if self.get_messages_error:
             raise self.get_messages_error
@@ -209,7 +221,7 @@ def test_public_surface_is_read_only():
 
     assert public == {
         "connect", "get_me", "disconnect", "list_dialogs", "list_folders", "get_chat_details", "get_messages", "search",
-        "get_media_files", "read_media", "get_post", "get_comments", "download_chat_photo",
+        "get_media_files", "read_media", "get_history_stats", "get_contact_cards", "get_post", "get_comments", "download_chat_photo",
     }
 
 
@@ -743,3 +755,52 @@ async def test_download_chat_photo_none_on_rpc_error(wrapper, caplog):
 
     assert await tg.download_chat_photo(-1001) is None
     assert "ChannelPrivate" in caplog.text
+
+
+# --- history stats and contact cards -------------------------------------------
+
+async def test_get_history_stats_uses_total_and_oldest_message(wrapper):
+    tg, fake = wrapper
+    fake.history_total = 1234
+    fake.messages_by_id = {}
+    fake.history_page = [tl_msg(id=1, text="old", date=datetime(2019, 3, 1))]
+    await tg.connect()
+
+    stats = await tg.get_history_stats(make_user_chat(make_person(id=777)))
+
+    assert stats == HistoryStats(1234, datetime(2019, 3, 1, tzinfo=UTC))
+    entity, kwargs = fake.history_calls[0]
+    assert entity == "input:777" and kwargs["limit"] == 1 and kwargs["reverse"] is True
+    assert {type(r).__name__ for r in fake.requests} <= ALLOWED_REQUESTS
+
+
+async def test_get_history_stats_empty_history(wrapper):
+    tg, fake = wrapper
+    fake.history_total = 0
+    fake.history_page = []
+    await tg.connect()
+
+    assert await tg.get_history_stats(make_user_chat(make_person(id=777))) == HistoryStats(0, None)
+
+
+async def test_get_contact_cards_filters_contacts(wrapper):
+    tg, fake = wrapper
+    card = tl_msg(id=5, text="", media=tl.MessageMediaContact(phone_number="1", first_name="Olena", last_name="P", vcard="", user_id=777))
+    fake.messages = [card, tl_msg(id=4, text="not a card")]
+    await tg.connect()
+
+    cards = await tg.get_contact_cards(make_user_chat(make_person(id=777)))
+
+    entity, kwargs = fake.iter_messages_calls[0]
+    assert isinstance(kwargs["filter"], tl.InputMessagesFilterContacts) and kwargs["limit"] == 20
+    assert [c.message_id for c in cards] == [5]
+    assert {type(r).__name__ for r in fake.requests} <= ALLOWED_REQUESTS
+
+
+async def test_history_stats_flood_becomes_rate_limited(wrapper):
+    tg, fake = wrapper
+    fake.history_error = FloodWaitError(request=None, capture=60)
+    await tg.connect()
+
+    with pytest.raises(RateLimitedError):
+        await tg.get_history_stats(make_user_chat(make_person(id=777)))

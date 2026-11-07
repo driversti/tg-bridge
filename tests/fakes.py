@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 from tg_bridge.errors import MessageNotFoundError
-from tg_bridge.source import Chat, ChatInfo, Folder, MediaFile, MediaInfo, Message, MessageQuery, Person, Post, SearchQuery
+from tg_bridge.source import Chat, ChatInfo, ContactCard, Folder, HistoryStats, MediaFile, MediaInfo, Message, MessageQuery, Person, Post, SearchQuery
 
 
 def make_person(**overrides) -> Person:
@@ -115,6 +115,8 @@ class FakeSource:
         chunk: int = 4,
         posts: dict[tuple[int, int], Post] | None = None,
         comments: dict[tuple[int, int], list[Message]] | None = None,
+        stats: dict[int, HistoryStats] | None = None,
+        cards: dict[int, list[ContactCard]] | None = None,
     ):
         self.me = me or make_person()
         self.error = error
@@ -131,6 +133,10 @@ class FakeSource:
         self.chunk = chunk
         self.posts = dict(posts or {})  # (channel id, post id) -> Post
         self.comments = {k: list(v) for k, v in (comments or {}).items()}  # (channel id, post id) -> comments
+        self.stats = dict(stats or {})
+        self.cards = {k: list(v) for k, v in (cards or {}).items()}
+        self.stats_calls: list[int] = []
+        self.card_calls: list[int] = []
         self.post_lookups: list[tuple[int, int]] = []
         self.comment_queries: list[MessageQuery] = []
         self.read_offsets: list[tuple[int, int]] = []  # (message_id, offset) per read_media call
@@ -183,6 +189,21 @@ class FakeSource:
         if query.boundary_id is not None:
             found = [m for m in found if m.id < query.boundary_id]
         return found[::-1][: query.limit]
+
+    async def get_history_stats(self, chat: Chat) -> HistoryStats:
+        self.stats_calls.append(chat.id)
+        if self.error:
+            raise self.error
+        if chat.id in self.stats:
+            return self.stats[chat.id]
+        msgs = self.messages.get(chat.id, [])
+        return HistoryStats(len(msgs), min((m.date for m in msgs), default=None))
+
+    async def get_contact_cards(self, chat: Chat, limit: int = 20) -> list[ContactCard]:
+        self.card_calls.append(chat.id)
+        if self.error:
+            raise self.error
+        return list(self.cards.get(chat.id, []))[:limit]
 
     async def get_post(self, chat: Chat, post_id: int) -> Post | None:
         self.post_lookups.append((chat.id, post_id))

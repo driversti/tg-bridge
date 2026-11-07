@@ -229,3 +229,12 @@ def test_export_filename_without_title_words():
     chat = make_chat(id=7, title="🚀🚀")
 
     assert export_filename(chat, Period(None, None), NOW, W, NOW).startswith("chat_7_")
+
+
+def test_header_lists_identity_guesses_after_peer():
+    chat = make_user_chat(make_person(id=777, first_name=None, last_name=None, username=None, is_deleted=True))
+    guess = "Olena P (name on a contact card, #5, 2020-05-02; a guess)"
+
+    text = render_header(info_of(chat), Period(None, None), W, NOW, identity=[guess])
+
+    assert f"- Peer: Deleted Account · id 777 · deleted\n- Identity guess: {guess}\n" in text

@@ -32,11 +32,12 @@ async def test_lists_tools(settings):
     tools = await build(FakeSource(), settings).list_tools()
 
     assert sorted(t.name for t in tools) == [
-        "download_media", "export_chat", "get_chat_info", "get_comments", "get_messages", "list_chats",
-        "list_folders", "now", "search_messages", "whoami",
+        "download_media", "export_chat", "export_deleted_users", "find_deleted_users", "get_chat_info", "get_comments",
+        "get_messages", "list_chats", "list_folders", "now", "search_messages", "whoami",
     ]
-    # export_chat and download_media write local files; every other tool changes nothing at all.
-    assert all(t.annotations.read_only_hint is (t.name not in ("export_chat", "download_media")) for t in tools)
+    # The exports and download_media write local files; every other tool changes nothing at all.
+    writers = ("export_chat", "export_deleted_users", "download_media")
+    assert all(t.annotations.read_only_hint is (t.name not in writers) for t in tools)
 
 
 async def test_call_whoami_returns_plain_text(settings):
@@ -232,6 +233,8 @@ MINIMAL_ARGS: dict[str, dict] = {
     "export_chat": {"chat": "family"},
     "download_media": {"chat": "family", "message_id": 7},
     "list_folders": {},
+    "find_deleted_users": {},
+    "export_deleted_users": {},
     "get_comments": {"chat": "news", "post": 3},
 }
 

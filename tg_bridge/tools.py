@@ -35,6 +35,7 @@ from tg_bridge.errors import (
     TelegramRefusedError,
     TgBridgeError,
 )
+from tg_bridge.deleted import DELETED_DIR, NONE_FOUND, ChatOutcome, deleted_dialogs, deleted_line, export_deleted, scan_deleted
 from tg_bridge.export import ExportResult, export_chat_file, period_text, when_text
 from tg_bridge.format import (
     MAX_CANDIDATES,
@@ -918,6 +919,71 @@ def _export_text(result: ExportResult, who: str, chat_id: int, period: Period, t
     else:
         lines.append(f"Range: {span}. The file has the full text; it was not read into this conversation.")
     return "\n".join(lines)
+
+
+SCOPE_UNCHECKED = "Scope is public: private chats not switched on in the allowlist were not checked."
+DELETED_HINT = (
+    "Chats you deleted on your side are gone and cannot be found. To save them as files: export_deleted_users()."
+)
+
+
+async def find_deleted_users(source: MessageSource, settings: Settings) -> str:
+    with _tool_errors():
+        found = await scan_deleted(source, settings.timezone)
+    scope = [SCOPE_UNCHECKED] if settings.scope != "all" else []
+    if not found:
+        return "\n".join([NONE_FOUND, *scope])
+    noun = "chat" if len(found) == 1 else "chats"
+    head = f"Found {len(found)} {noun} with deleted accounts (1:1 chats, archived included)."
+    text = "\n".join([head, *(deleted_line(i, settings.timezone) for i in found), *scope, DELETED_HINT])
+    return text if len(text) <= settings.max_chars else text[: settings.max_chars - 1] + "…"
+
+
+async def export_deleted_users(
+    source: MessageSource,
+    settings: Settings,
+    *,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> str:
+    dest = settings.export_dir / DELETED_DIR
+    with _tool_errors():
+        total = len(deleted_dialogs(await source.list_dialogs()))
+        outcomes, left = await export_deleted(source, dest, settings.timezone, now(), sleep=sleep, clock=clock)
+    scope = [SCOPE_UNCHECKED] if settings.scope != "all" else []
+    if total == 0:
+        return "\n".join([NONE_FOUND, *scope])
+    lines = [f"Deleted-account chats: {total}. Files in {dest}:", *(_outcome_line(o) for o in outcomes)]
+    stopped = next((o for o in outcomes if o.status == "stopped"), None)
+    call = "export_deleted_users()"
+    if stopped is not None:
+        lines.append(f"Stopped: {one_line(stopped.reason or 'unknown')}. Call {call} again later to continue.")
+    elif left or any(o.status == "paused" for o in outcomes):
+        pending = f"; {left} {'chat' if left == 1 else 'chats'} not started yet" if left else ""
+        lines.append(f"Not finished: one call has a time limit{pending}. Next: call {call}")
+    else:
+        lines.append("All files are complete. They hold the full text; it was not read into this conversation.")
+    lines.extend(scope)
+    text = "\n".join(lines)
+    return text if len(text) <= settings.max_chars else text[: settings.max_chars - 1] + "…"
+
+
+def _outcome_line(o: ChatOutcome) -> str:
+    head = f"- id {o.chat.id}: "
+    noun = "message" if o.count == 1 else "messages"
+    match o.status:
+        case "exported":
+            return f"{head}{o.count} {noun} → {o.path}"
+        case "already":
+            return f"{head}already exported earlier → {o.path}"
+        case "paused":
+            return f"{head}{o.count} {noun} so far (paused) → {o.path}"
+        case "empty":
+            return f"{head}no messages, no file"
+        case _:
+            tail = f" → {o.path}" if o.path else ""
+            return f"{head}stopped early: {one_line(o.reason or 'unknown')}{tail}"
 
 
 async def download_media(

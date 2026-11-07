@@ -5,7 +5,7 @@ import pytest
 
 from tests.fakes import FakeSource, make_chat, make_media_file, make_message, make_person, make_user_chat
 from tg_bridge.errors import ChatNotFoundError
-from tg_bridge.source import MessageQuery, Post, SearchOffset, SearchQuery
+from tg_bridge.source import ContactCard, HistoryStats, MessageQuery, Post, SearchOffset, SearchQuery
 from tg_bridge.source import scoped as scoped_mod
 from tg_bridge.source.allowlist import Allowlist
 from tg_bridge.source.scoped import ScopedSource
@@ -222,3 +222,18 @@ async def test_global_search_drops_bot_chat_hits(tmp_path):
     scoped, _ = build_guarded(tmp_path, messages={BOTCHAT.id: hits(BOTCHAT, 1, start=20), PUB.id: hits(PUB, 1)})
     found = await scoped.search_messages(squery(limit=10), None)
     assert [m.chat_id for m in found] == [PUB.id]
+
+
+async def test_hidden_chat_stats_and_cards_raise_chat_not_found(tmp_path):
+    scoped, _, _ = build(tmp_path)
+    for call in (scoped.get_history_stats(PRIV_OFF), scoped.get_contact_cards(PRIV_OFF)):
+        with pytest.raises(ChatNotFoundError):
+            await call
+
+
+async def test_visible_chat_stats_and_cards_pass_through(tmp_path):
+    stats = HistoryStats(3, T0)
+    card = ContactCard(1, T0, 7, "A", None)
+    scoped, _, _ = build(tmp_path, stats={PUB.id: stats}, cards={PUB.id: [card]})
+    assert await scoped.get_history_stats(PUB) == stats
+    assert await scoped.get_contact_cards(PUB) == [card]

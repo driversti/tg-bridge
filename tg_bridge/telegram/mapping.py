@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from telethon import helpers, utils
 from telethon.tl import types as tl
 
-from tg_bridge.source import Chat, ChatKind, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Post, Topic
+from tg_bridge.source import Chat, ChatKind, ContactCard, Folder, MediaFile, MediaInfo, MediaKind, Message, Person, Post, Topic
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def chat_from_dialog(
         title=title,
         username=username,
         peer=peer,
-        last_message_at=_utc(getattr(dialog, "date", None)),
+        last_message_at=utc(getattr(dialog, "date", None)),
         is_archived=getattr(dialog, "folder_id", None) == 1,
         is_forum=forum,
         is_muted=_is_muted(mute_until, now),
@@ -109,7 +109,7 @@ def _mute_category(kind: ChatKind) -> str:
 
 
 def _is_muted(mute_until: datetime | None, now: datetime | None) -> bool:
-    until = _utc(mute_until)
+    until = utc(mute_until)
     return until is not None and until > (now or datetime.now(UTC))
 
 
@@ -181,7 +181,7 @@ def topic_from_forum_topic(topic) -> Topic | None:
     return Topic(id=topic.id, title=topic.title, is_closed=bool(topic.closed))
 
 
-def _utc(moment: datetime | None) -> datetime | None:
+def utc(moment: datetime | None) -> datetime | None:
     if moment is None:
         return None
     # Telethon hands out naive datetimes that are already UTC.
@@ -213,8 +213,8 @@ def message_from_tl(msg, chat_id: int) -> Message | None:
     return Message(
         id=msg.id,
         chat_id=chat_id,
-        date=_utc(msg.date),
-        edit_date=_utc(getattr(msg, "edit_date", None)),
+        date=utc(msg.date),
+        edit_date=utc(getattr(msg, "edit_date", None)),
         out=bool(msg.out),
         sender=person,
         sender_title=title,
@@ -226,6 +226,20 @@ def message_from_tl(msg, chat_id: int) -> Message | None:
         action=_action(msg) if is_service else None,
         sender_username=username,
         comment_count=comments,
+    )
+
+
+def contact_card_from_tl(msg) -> ContactCard | None:
+    """A shared contact's name as typed on the card; None for any other message or a card without a Telegram user."""
+    media = getattr(msg, "media", None)
+    if not isinstance(media, tl.MessageMediaContact) or not media.user_id:
+        return None
+    return ContactCard(
+        message_id=msg.id,
+        date=utc(msg.date),
+        user_id=media.user_id,
+        first_name=media.first_name or None,
+        last_name=media.last_name or None,
     )
 
 
