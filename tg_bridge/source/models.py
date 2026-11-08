@@ -45,6 +45,7 @@ class Chat:
     is_creator: bool = False  # the owner created this group/channel; always False for users
     photo_id: int | None = None  # changes when the profile photo does; lets the admin page cache icons
     top_message_id: int | None = None  # newest message id: makes a t.me/c/<N>/<id> link that opens in Telegram
+    last_is_join_notice: bool = False  # newest message is "X joined Telegram": nothing was ever said after it
 
     @property
     def deleted_peer(self) -> bool:

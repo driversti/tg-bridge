@@ -17,7 +17,7 @@ from tg_bridge.source.models import Chat, Folder, Person
 
 log = logging.getLogger(__name__)
 
-VERSION = 2  # 2: folders and the chat state their rules need
+VERSION = 3  # 2: folders and the chat state their rules need; 3: last_is_join_notice (an old file would say False)
 
 
 class DialogCache:
@@ -86,6 +86,7 @@ def _chat_from_dict(d: dict[str, Any]) -> Chat:
         is_creator=d.get("is_creator", False),
         photo_id=d.get("photo_id"),
         top_message_id=d.get("top_message_id"),
+        last_is_join_notice=d.get("last_is_join_notice", False),
     )
 
 

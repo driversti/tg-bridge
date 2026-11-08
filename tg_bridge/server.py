@@ -256,8 +256,9 @@ def build_server(
     @server.tool(annotations=READ_ONLY, structured_output=False)
     async def find_deleted_users() -> str:
         """List the user's 1:1 chats whose other person deleted their Telegram account: message count, dates and any
-        name guess. Use it for "deleted accounts", "Deleted Account chats". Chats the user deleted on their own side
-        cannot be recovered. To save them as files call export_deleted_users()."""
+        name guess. Use it for "deleted accounts", "Deleted Account chats". Chats that hold only the "joined Telegram"
+        notice are skipped. Chats the user deleted on their own side cannot be recovered. To save them as files call
+        export_deleted_users()."""
         return await stamped(lambda _: tools.find_deleted_users(source, budget))
 
     @server.tool(annotations=WRITES_LOCAL_FILE, structured_output=False)

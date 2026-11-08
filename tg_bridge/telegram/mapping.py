@@ -76,6 +76,7 @@ def chat_from_dialog(
         is_creator=False if isinstance(entity, tl.User) else bool(getattr(entity, "creator", False)),
         photo_id=_photo_id(entity),
         top_message_id=_top_message_id(dialog, raw),
+        last_is_join_notice=isinstance(getattr(getattr(dialog, "message", None), "action", None), tl.MessageActionContactSignUp),
     )
 
 
