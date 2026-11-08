@@ -165,6 +165,8 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 
 | Tool | Purpose | Returns |
 |---|---|---|
+| `whoami()` | The logged-in account (checks the whole chain) | name, @username, id |
+| `now()` | Current date and time in the configured time zone; call it before answering anything relative to today | date, weekday, time, time zone, ISO week, this/last week, month and year as dates |
 | `list_chats(query?, kind?, limit=30, folder?, min_folders?)` | Find/browse dialogs (incl. archived); `folder` (id or title words) limits to that folder, in its order; `min_folders=N` keeps chats in ≥ N folders and names them | id, kind, title, @username, last message date, `deleted_peer` flag |
 | `list_folders()` | The user's chat folders in app order | id, title, kind, chat count, unread chats, rule/explicit summary |
 | `get_chat_info(chat)` | Details of one chat | type, title, folders, description, members count, peer identity, topics (forums) |
@@ -172,8 +174,8 @@ fragment is ambiguous, the tool returns the candidate list instead of guessing.
 | `get_comments(chat, post?, period…, cursor?, limit?)` | A channel post's comment thread, oldest first, author and comment links per line, no membership in the discussion group needed; `post` may be left out when a cursor continues the thread | compact lines + `next_cursor` |
 | `search_messages(query, chat? \| folder?, period…, from_me?, cursor?, limit?)` | Server-side text search, in one chat, in a folder's chats, or globally | compact lines with chat name + link |
 | `export_chat(chat, period…, format="md")` | Write a conversation to a Markdown file | file path, message count, date range |
-| `find_deleted_users()` | 1:1 dialogs whose peer account is deleted (archived included; under `public` only switched-on private chats) | one line per chat: id, message count, first → last date, archived flag, name guesses from contact cards; totals in the first line |
-| `export_deleted_users()` | One Markdown file per deleted-user dialog in `<EXPORT_DIR>/deleted-users/`; idempotent (complete files skipped, unfinished resumed), one 40 s budget per call | one line per chat with path + count; `Next: call export_deleted_users()` while chats remain |
+| `find_deleted_users()` | 1:1 dialogs whose peer account is deleted (archived included; under `public` only switched-on private chats). Chats holding only the "joined Telegram" notice are skipped and counted; per-chat checks stop after 30 s, later chats are listed as not checked | one line per chat: id, message count, first → last date, archived flag, name guesses from contact cards; totals in the first line |
+| `export_deleted_users()` | One Markdown file per deleted-user dialog in `<EXPORT_DIR>/deleted-users/` (join-notice-only chats skipped); idempotent (complete files skipped, unfinished resumed), one 40 s budget per call | one line per chat with path + count; `Next: call export_deleted_users()` while chats remain |
 | `download_media(chat, message_id)` | Save one message's media to the download dir | file path, size |
 
 **Compact message line** (builder may refine, must stay token-cheap):
@@ -263,7 +265,7 @@ runs in public scope. Under `public`, `list_chats` ends with the same line.
 
 | Stage | Module | Notes |
 |---|---|---|
-| 2 | **Recorder + ArchiveSource** on the home server (LXC) | Always-on listener: new messages, edits (versions), deletions, profile snapshots → SQLite. MCP over network with auth |
+| 2 | **Recorder + ArchiveSource** on the home server (LXC) | Always-on listener: new messages, edits (versions), deletions, profile snapshots → SQLite (network MCP with auth already exists: feature 11) |
 | 2b | **Backfill** | Throttled, resumable history import into the archive |
 | 3 | **Semantic search** | Embeddings via a local model (host decided in its brief), `sqlite-vec` |
 | 4 | **Phone access** | Covered by the owner's agent Hermes as an MCP client of the networked bridge with `scope=public` (features 11, 17) |

@@ -6,6 +6,8 @@
 Find every 1:1 dialog whose peer account is now deleted and save each conversation to its own file.
 
 ## Scope
+_Original brief. As built: no `dir` argument, guesses from contact cards only, chats holding only the "joined Telegram" notice are skipped. See `docs/roadmap.md` Log, 05._
+
 - `find_deleted_users()`: scan all dialogs (incl. archived) for users with `deleted=True`; return chat id, user id, any identity still available, message count, first/last message date.
 - Best-effort identity recovery for files: names seen in forwards/replies/mentions within the chat, if any. Mark it clearly as a "guess".
 - `export_deleted_users(dir?)`: reuse 04's exporter, one file per user, into `<EXPORT_DIR>/deleted-users/`; returns list of paths + counts.

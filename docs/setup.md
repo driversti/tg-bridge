@@ -1,4 +1,4 @@
-# Setup & deployment (stage 1: Mac)
+# Setup & deployment (Mac, homelab LXC)
 
 ## 1. Credentials
 
