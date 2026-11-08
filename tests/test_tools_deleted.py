@@ -240,3 +240,51 @@ async def test_export_none_found(settings):
     assert await export(FakeSource(dialogs=[make_user_chat()]), settings) == (
         "No chats with deleted accounts (1:1 chats, archived included)."
     )
+
+
+async def test_find_skips_join_only_chats_and_says_how_many(settings):
+    src = FakeSource(
+        dialogs=[gone(777, day(2023, 7, 14)), gone(501, day(2020, 1, 1), last_is_join_notice=True),
+                 gone(502, day(2020, 1, 2), last_is_join_notice=True)],
+        stats={777: HistoryStats(12, day(2019, 3, 1))},
+    )
+
+    out = await tools.find_deleted_users(src, settings)
+
+    assert out.splitlines()[:3] == [
+        "Found 1 chat with deleted accounts (1:1 chats, archived included).",
+        "Skipped 2 chats that hold only the \"joined Telegram\" notice.",
+        "Deleted Account · id 777 · 12 messages · 2019-03-01 → 2023-07-14",
+    ]
+
+
+async def test_find_only_join_only_chats(settings):
+    src = FakeSource(dialogs=[gone(501, day(2020, 1, 1), last_is_join_notice=True)])
+
+    out = await tools.find_deleted_users(src, settings)
+
+    assert out.splitlines() == [
+        "No chats with deleted accounts (1:1 chats, archived included).",
+        "Skipped 1 chat that holds only the \"joined Telegram\" notice.",
+    ]
+
+
+async def test_find_marks_chats_not_checked_in_time(settings):
+    ticks = iter([0.0, 0.0, 99.0, 99.0])
+    src = FakeSource(dialogs=[gone(1, day(2021, 1, 1)), gone(2, day(2022, 2, 2))], stats={1: HistoryStats(3, day(2020, 1, 1))})
+
+    out = await tools.find_deleted_users(src, settings, clock=lambda: next(ticks))
+
+    assert "Deleted Account · id 2 · not checked (time limit) · last 2022-02-02" in out
+
+
+async def test_export_skips_join_only_chats(settings):
+    a = gone(777)
+    joined = gone(501, last_is_join_notice=True)
+    src = FakeSource(dialogs=[a, joined], messages={777: history(a, 2), 501: history(joined, 1)})
+
+    out = await tools.export_deleted_users(src, settings)
+
+    assert out.splitlines()[0].startswith("Deleted-account chats: 1.")
+    assert "id 501" not in out
+    assert len(list((settings.export_dir / "deleted-users").iterdir())) == 1

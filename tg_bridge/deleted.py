@@ -21,19 +21,32 @@ log = logging.getLogger(__name__)
 MAX_GUESSES = 3
 DELETED_DIR = "deleted-users"  # under the export dir; fixed, so no caller-supplied path ever reaches the disk
 MIN_START = 5.0  # seconds left that justify starting or resuming a chat
+# find_deleted_users checks counts and guesses for this long, then lists the rest unchecked: Telegram throttles
+# per-chat history reads (a ~25 s FloodWait every ~60 chats), and LM Studio ends a tool call after ~60 s.
+SCAN_BUDGET = 30.0
 NONE_FOUND = "No chats with deleted accounts (1:1 chats, archived included)."
 
 
 @dataclass(frozen=True)
 class DeletedDialog:
     chat: Chat
-    stats: HistoryStats | None  # None: Telegram refused the count for this chat
+    stats: HistoryStats | None  # None: Telegram refused the count, or the chat was not checked
     guesses: tuple[str, ...]
+    checked: bool = True  # False: the scan ran out of time before this chat
+
+
+def _deleted(chat: Chat) -> bool:
+    return chat.kind == "user" and chat.deleted_peer  # bots have their own kind
 
 
 def deleted_dialogs(chats: Iterable[Chat]) -> list[Chat]:
-    """1:1 chats with a deleted peer (bots have their own kind), in id order so repeated calls walk the same list."""
-    return sorted((c for c in chats if c.kind == "user" and c.deleted_peer), key=lambda c: c.id)
+    """1:1 chats with a deleted peer, in id order so repeated calls walk the same list. Chats holding only the
+    "joined Telegram" notice are left out: the owner never talked there (most deleted-account chats are such)."""
+    return sorted((c for c in chats if _deleted(c) and not c.last_is_join_notice), key=lambda c: c.id)
+
+
+def join_only_count(chats: Iterable[Chat]) -> int:
+    return sum(1 for c in chats if _deleted(c) and c.last_is_join_notice)
 
 
 def identity_guesses(peer_id: int, cards: Sequence[ContactCard], tz: ZoneInfo) -> tuple[str, ...]:
@@ -55,11 +68,19 @@ def identity_guesses(peer_id: int, cards: Sequence[ContactCard], tz: ZoneInfo) -
     return tuple(out)
 
 
-async def scan_deleted(source: MessageSource, tz: ZoneInfo) -> list[DeletedDialog]:
-    """Count and identity guess for every deleted-account chat. A rate limit aborts the scan (one retry later is
-    cheaper than a half list); other refusals only blank that chat's count or guess."""
+async def scan_deleted(
+    source: MessageSource, tz: ZoneInfo, chats: Sequence[Chat] | None = None, *, clock: Callable[[], float] = time.monotonic
+) -> list[DeletedDialog]:
+    """Count and identity guess for every deleted-account chat, for SCAN_BUDGET seconds; later chats are listed
+    unchecked. A rate limit aborts the scan (one retry later is cheaper than a half list); other refusals only blank
+    that chat's count or guess."""
     found: list[DeletedDialog] = []
-    for chat in deleted_dialogs(await source.list_dialogs()):
+    targets = deleted_dialogs(chats if chats is not None else await source.list_dialogs())
+    deadline = clock() + SCAN_BUDGET
+    for chat in targets:
+        if clock() > deadline:
+            found.append(DeletedDialog(chat, None, (), checked=False))
+            continue
         try:
             stats: HistoryStats | None = await source.get_history_stats(chat)
         except RateLimitedError:
@@ -73,7 +94,7 @@ async def scan_deleted(source: MessageSource, tz: ZoneInfo) -> list[DeletedDialo
         except TgBridgeError:
             guesses = ()
         found.append(DeletedDialog(chat, stats, guesses))
-    log.info("deleted-account chats found=%d", len(found))
+    log.info("deleted-account chats found=%d unchecked=%d", len(found), sum(not i.checked for i in found))
     return found
 
 
@@ -85,7 +106,7 @@ def deleted_line(item: DeletedDialog, tz: ZoneInfo) -> str:
     chat, stats = item.chat, item.stats
     parts = [one_line(chat.title), f"id {chat.id}"]
     if stats is None:
-        parts.append("count unavailable")
+        parts.append("count unavailable" if item.checked else "not checked (time limit)")
         if chat.last_message_at:
             parts.append(f"last {_day(chat.last_message_at, tz)}")
     else:

@@ -773,3 +773,14 @@ def test_contact_card_from_tl_reads_card_fields():
 def test_contact_card_from_tl_none_for_other_media_and_zero_user_id():
     assert contact_card_from_tl(tl_msg(id=5, text="plain")) is None
     assert contact_card_from_tl(tl_msg(id=6, text="", media=tl_card(user_id=0))) is None
+
+
+def test_dialog_whose_last_message_is_the_join_notice():
+    joined = dialog(tl_user(deleted=True, first_name=None, last_name=None, username=None))
+    joined.message = tl.MessageService(id=3, peer_id=tl.PeerUser(1), date=None, action=tl.MessageActionContactSignUp())
+    talked = dialog(tl_user())
+    talked.message = tl.Message(id=4, peer_id=tl.PeerUser(1), date=None, message="hi")
+
+    assert chat_from_dialog(joined).last_is_join_notice is True
+    assert chat_from_dialog(talked).last_is_join_notice is False
+    assert chat_from_dialog(dialog(tl_user())).last_is_join_notice is False

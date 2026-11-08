@@ -35,7 +35,16 @@ from tg_bridge.errors import (
     TelegramRefusedError,
     TgBridgeError,
 )
-from tg_bridge.deleted import DELETED_DIR, NONE_FOUND, ChatOutcome, deleted_dialogs, deleted_line, export_deleted, scan_deleted
+from tg_bridge.deleted import (
+    DELETED_DIR,
+    NONE_FOUND,
+    ChatOutcome,
+    deleted_dialogs,
+    deleted_line,
+    export_deleted,
+    join_only_count,
+    scan_deleted,
+)
 from tg_bridge.export import ExportResult, export_chat_file, period_text, when_text
 from tg_bridge.format import (
     MAX_CANDIDATES,
@@ -927,15 +936,27 @@ DELETED_HINT = (
 )
 
 
-async def find_deleted_users(source: MessageSource, settings: Settings) -> str:
+def _join_only_line(n: int) -> list[str]:
+    if n == 0:
+        return []
+    return [f'Skipped {n} chat that holds only the "joined Telegram" notice.' if n == 1
+            else f'Skipped {n} chats that hold only the "joined Telegram" notice.']
+
+
+async def find_deleted_users(
+    source: MessageSource, settings: Settings, *, clock: Callable[[], float] = time.monotonic
+) -> str:
     with _tool_errors():
-        found = await scan_deleted(source, settings.timezone)
+        chats = await source.list_dialogs()
+        found = await scan_deleted(source, settings.timezone, chats, clock=clock)
     scope = [SCOPE_UNCHECKED] if settings.scope != "all" else []
+    # Right under the first line, so cutting a long list to max_chars never hides it.
+    skipped = _join_only_line(join_only_count(chats))
     if not found:
-        return "\n".join([NONE_FOUND, *scope])
+        return "\n".join([NONE_FOUND, *skipped, *scope])
     noun = "chat" if len(found) == 1 else "chats"
     head = f"Found {len(found)} {noun} with deleted accounts (1:1 chats, archived included)."
-    text = "\n".join([head, *(deleted_line(i, settings.timezone) for i in found), *scope, DELETED_HINT])
+    text = "\n".join([head, *skipped, *(deleted_line(i, settings.timezone) for i in found), *scope, DELETED_HINT])
     return text if len(text) <= settings.max_chars else text[: settings.max_chars - 1] + "…"
 
 

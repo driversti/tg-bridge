@@ -121,3 +121,20 @@ def test_old_file_without_new_fields_loads_with_defaults(tmp_path):
     loaded, _, _ = cache.load(now=1.0, max_age=300)
 
     assert all((c.is_self, c.is_creator, c.photo_id, c.top_message_id) == (False, False, None, None) for c in loaded)
+
+
+def test_join_notice_flag_survives_the_round_trip(tmp_path):
+    cache = DialogCache(tmp_path / "d.json")
+    chat = make_user_chat(last_is_join_notice=True)
+    cache.save([chat], [], 1000.0)
+
+    [loaded], _, _ = cache.load(1000.0, 300.0)
+
+    assert loaded.last_is_join_notice is True
+
+
+def test_version_2_file_is_a_miss(tmp_path):
+    path = tmp_path / "d.json"
+    path.write_text('{"version": 2, "saved_at": 1000.0, "chats": [], "folders": []}')
+
+    assert DialogCache(path).load(1000.0, 300.0) is None

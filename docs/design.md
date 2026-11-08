@@ -281,7 +281,8 @@ runs in public scope. Under `public`, `list_chats` ends with the same line.
   only (`messages.SearchGlobal`). It never returns public chats he isn't in.
 - **`topic`** accepts a topic id or title fragment from `get_chat_info`.
 - **Deleted users:** only 1:1 dialogs, incl. archived and all folders. Message count via a
-  cheap per-dialog total query, and only for dialogs already detected as deleted (there are few).
+  cheap per-dialog total query, and only for dialogs already detected as deleted. Not "few": the owner has ~240,
+  almost all holding only the "joined Telegram" notice; those are skipped from the dialog list (see roadmap Log, 05).
   A slow first scan is acceptable. Dialog list is cached per process.
 - **Exports:** filenames are sanitised slugs + id + period + timestamp. They **never
   overwrite**. No size cap (it's a file, not model context). Layout is defined in feature 04.
